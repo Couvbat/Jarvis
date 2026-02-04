@@ -5,11 +5,12 @@ A privacy-focused, local-first voice assistant for Linux that runs entirely on y
 ## Features
 
 ### Core Features
+
 - 🧠 **Local AI**: Powered by Ollama with support for various LLM models (Llama 3.1, Mistral, etc.)
 - 🎤 **Speech-to-Text**: Uses OpenAI Whisper (via faster-whisper) for accurate voice recognition
 - 🔊 **Text-to-Speech**: Uses Piper TTS for natural voice synthesis
 - 🎯 **Voice Activity Detection**: Intelligent listening with automatic silence detection
-- 🛠️ **System Operations**: 
+- 🛠️ **System Operations**:
   - File management (create, read, delete files and directories)
   - Web page fetching and information retrieval
   - Application launching
@@ -17,6 +18,7 @@ A privacy-focused, local-first voice assistant for Linux that runs entirely on y
 - 💬 **Conversation Memory**: Maintains context across multiple interactions
 
 ### Phase 1 Enhancements (New!)
+
 - 🎙️ **Wake Word Detection**: Hands-free activation with "Hey Jarvis" using Porcupine
 - 💾 **Conversation Persistence**: Save and restore conversations across sessions with SQLite
 - 🔄 **Error Recovery**: Automatic retry with fallback mechanisms for robust operation
@@ -111,6 +113,7 @@ nano .env
 ```
 
 Key settings to configure:
+
 - `WHISPER_MODEL`: `tiny`, `base`, `small`, `medium`, or `large` (base recommended)
 - `OLLAMA_MODEL`: Model name you pulled (e.g., `llama3.1:8b`)
 - `ALLOWED_DIRECTORIES`: Directories where file operations are permitted
@@ -137,6 +140,7 @@ WAKE_WORD_SENSITIVITY=0.5
 ```
 
 **Get Picovoice Access Key:**
+
 1. Visit https://console.picovoice.ai/
 2. Sign up for a free account
 3. Create a new access key
@@ -151,6 +155,7 @@ python main.py
 ```
 
 Speak naturally after the "Listening..." prompt. The assistant will:
+
 1. Record your voice until silence is detected
 2. Transcribe using Whisper
 3. Process with the LLM
@@ -158,6 +163,7 @@ Speak naturally after the "Listening..." prompt. The assistant will:
 5. Respond with synthesized speech
 
 **With Wake Word Enabled:**
+
 1. Wait for Jarvis to say "Listening for wake word..."
 2. Say "Hey Jarvis" (or your configured wake word)
 3. Give your command immediately after detection
@@ -173,6 +179,7 @@ python main.py --tui
 ```
 
 The TUI displays:
+
 - **Header**: Current status and language
 - **Conversation Panel**: Complete chat history with timestamps
 - **Actions Panel**: Real-time log of system operations and tools
@@ -189,6 +196,7 @@ python main.py --text
 ### Example Commands
 
 **English:**
+
 - "Create a file called notes.txt in my home directory"
 - "What's on the website example.com?"
 - "List the files in my Documents folder"
@@ -197,6 +205,7 @@ python main.py --text
 - "What's the weather?" (with web search)
 
 **French:**
+
 - "Crée un fichier appelé notes.txt dans mon répertoire personnel"
 - "Qu'est-ce qu'il y a sur le site exemple.com?"
 - "Liste les fichiers dans mon dossier Documents"
@@ -206,11 +215,13 @@ python main.py --text
 ### Language Switching
 
 **Switch to French:**
+
 - "Switch to French"
 - "Parle français"
 - "En français"
 
 **Switch to English:**
+
 - "Switch to English"
 - "Parle anglais"
 - "In English"
@@ -226,10 +237,12 @@ Say or type: "exit", "quit", "goodbye", "stop" (English) or "au revoir", "arrêt
 Edit [.env](.env) to customize:
 
 ### Audio Settings
+
 - `SAMPLE_RATE`: Audio sample rate (default: 16000 Hz)
 - `CHANNELS`: Audio channels (default: 1 for mono)
 
 ### STT Settings
+
 - `WHISPER_MODEL`: Model size (`tiny`, `base`, `small`, `medium`, `large`)
   - `tiny`: Fastest, least accurate (~75 MB)
   - `base`: Good balance (~142 MB) - **Recommended**
@@ -241,22 +254,26 @@ Edit [.env](.env) to customize:
 - `WHISPER_LANGUAGE`: Language code (`en` for English, `fr` for French, or `auto` for auto-detection)
 
 ### LLM Settings
+
 - `OLLAMA_HOST`: Ollama server URL (default: http://localhost:11434)
 - `OLLAMA_MODEL`: Model name (e.g., `llama3.1:8b`)
 - `LLM_TEMPERATURE`: Response creativity (0.0-1.0, default: 0.7)
 - `LLM_MAX_TOKENS`: Maximum response length (default: 1000)
 
 ### TTS Settings
+
 - `PIPER_MODEL`: Voice model (default: `en_US-lessac-medium`)
 - `PIPER_SPEAKER_ID`: Voice variant (0-based index)
 
 ### Security Settings
+
 - `ALLOWED_DIRECTORIES`: Comma-separated paths where file operations are allowed
 - `COMMAND_WHITELIST`: Comma-separated list of allowed commands
 
 ### Phase 1 Settings (New!)
 
 #### Error Recovery
+
 - `ENABLE_RETRY_LOGIC`: Enable automatic retry with backoff (default: `True`)
 - `MAX_RETRY_ATTEMPTS`: Maximum retry attempts (default: `3`)
 - `RETRY_BACKOFF_FACTOR`: Backoff multiplier between retries (default: `2.0`)
@@ -265,11 +282,13 @@ Edit [.env](.env) to customize:
 - `OFFLINE_RESPONSE_CACHE_SIZE`: Number of responses to cache (default: `50`)
 
 #### Conversation Persistence
+
 - `ENABLE_CONVERSATION_PERSISTENCE`: Save conversations to database (default: `True`)
 - `CONVERSATION_DB_PATH`: Path to SQLite database (default: `~/.local/share/jarvis/conversations.db`)
 - `LOAD_PREVIOUS_CONTEXT`: Load last conversation on startup (default: `True`)
 
 #### Wake Word Detection
+
 - `ENABLE_WAKE_WORD`: Enable hands-free wake word activation (default: `False`)
 - `PORCUPINE_ACCESS_KEY`: Picovoice access key from https://console.picovoice.ai/ (required if enabled)
 - `WAKE_WORD_KEYWORD`: Wake word to detect (default: `jarvis`, options: `computer`, `hey google`, etc.)
@@ -305,6 +324,7 @@ Jarvis/
 ### Audio Issues
 
 **No microphone input:**
+
 ```bash
 # List audio devices
 python -c "import sounddevice as sd; print(sd.query_devices())"
@@ -314,6 +334,7 @@ python -c "import sounddevice as sd; import numpy as np; print('Recording...'); 
 ```
 
 **Permission denied:**
+
 ```bash
 # Add user to audio group
 sudo usermod -a -G audio $USER
@@ -323,18 +344,21 @@ sudo usermod -a -G audio $USER
 ### Whisper Issues
 
 **Model download fails:**
+
 ```bash
 # Manually download models
 python -c "from faster_whisper import WhisperModel; model = WhisperModel('base')"
 ```
 
 **Out of memory:**
+
 - Use a smaller model (`tiny` or `base`)
 - Set `WHISPER_COMPUTE_TYPE=int8`
 
 ### Ollama Issues
 
 **Connection refused:**
+
 ```bash
 # Start Ollama service
 ollama serve
@@ -344,6 +368,7 @@ ps aux | grep ollama
 ```
 
 **Model not found:**
+
 ```bash
 # List installed models
 ollama list
@@ -355,6 +380,7 @@ ollama pull llama3.1:8b
 ### Piper Issues
 
 **Binary not found:**
+
 ```bash
 # Re-run setup
 python setup_piper.py
@@ -363,6 +389,7 @@ python setup_piper.py
 ```
 
 **Voice sounds robotic:**
+
 - Try a different model (e.g., `en_US-amy-medium`)
 - Download from: https://huggingface.co/rhasspy/piper-voices
 
@@ -411,6 +438,7 @@ Jarvis includes several security measures:
 **Whitelist Storage**: Approved actions are stored in `command_whitelist.json` for persistence.
 
 **Confirmation Options**:
+
 - `y` - Execute this action once
 - `a` - Execute and add to whitelist for future auto-approval
 - `n` - Cancel the action
@@ -462,31 +490,37 @@ Jarvis includes a comprehensive test suite to ensure reliability and correctness
 ### Running Tests
 
 **Run all tests with coverage:**
+
 ```bash
 ./run_tests.sh
 ```
 
 **Run only unit tests:**
+
 ```bash
 ./run_tests.sh --unit
 ```
 
 **Run tests without coverage:**
+
 ```bash
 ./run_tests.sh --no-coverage
 ```
 
 **Verbose output:**
+
 ```bash
 ./run_tests.sh -v
 ```
 
 **Run specific test file:**
+
 ```bash
 pytest tests/test_error_recovery.py -v
 ```
 
 **Run tests by marker:**
+
 ```bash
 pytest -m unit                    # Only unit tests
 pytest -m integration             # Only integration tests
@@ -506,6 +540,7 @@ pytest -m requires_ollama         # Tests requiring Ollama
 ### Coverage Report
 
 After running tests with coverage, open the HTML report:
+
 ```bash
 xdg-open htmlcov/index.html
 ```
@@ -537,6 +572,7 @@ Contributions are welcome! Areas for improvement:
 - Additional test coverage
 
 **Before submitting a PR:**
+
 1. Run the test suite: `./run_tests.sh`
 2. Ensure coverage remains above 80%
 3. Add tests for new features
