@@ -4,6 +4,7 @@ A privacy-focused, local-first voice assistant for Linux that runs entirely on y
 
 ## Features
 
+### Core Features
 - 🧠 **Local AI**: Powered by Ollama with support for various LLM models (Llama 3.1, Mistral, etc.)
 - 🎤 **Speech-to-Text**: Uses OpenAI Whisper (via faster-whisper) for accurate voice recognition
 - 🔊 **Text-to-Speech**: Uses Piper TTS for natural voice synthesis
@@ -15,12 +16,24 @@ A privacy-focused, local-first voice assistant for Linux that runs entirely on y
 - 🔒 **Security**: Sandboxed execution with whitelisted commands and directory restrictions
 - 💬 **Conversation Memory**: Maintains context across multiple interactions
 
+### Phase 1 Enhancements (New!)
+- 🎙️ **Wake Word Detection**: Hands-free activation with "Hey Jarvis" using Porcupine
+- 💾 **Conversation Persistence**: Save and restore conversations across sessions with SQLite
+- 🔄 **Error Recovery**: Automatic retry with fallback mechanisms for robust operation
+  - STT fallback to openai-whisper if faster-whisper fails
+  - TTS fallback to espeak if Piper fails
+  - LLM offline cache for common responses
+  - Web fetch retry with exponential backoff
+- 🏥 **Health Checks**: Automatic service monitoring on startup
+
 ## Architecture
 
 ```
 Audio Input → STT (Whisper) → LLM (Ollama) → Action Executor → TTS (Piper) → Audio Output
-                                     ↓
-                            File Ops | Web Fetch | App Launch
+                ↑                   ↓                                  ↓
+          Wake Word          File Ops | Web Fetch | App Launch    Fallback TTS
+                                       ↓
+                               Conversation DB
 ```
 
 ## Requirements
@@ -103,6 +116,32 @@ Key settings to configure:
 - `ALLOWED_DIRECTORIES`: Directories where file operations are permitted
 - `COMMAND_WHITELIST`: Whitelisted commands for system operations
 
+### 7. Enable Phase 1 Features (Optional)
+
+Edit `.env` to enable new features:
+
+```env
+# Enable conversation persistence
+ENABLE_CONVERSATION_PERSISTENCE=True
+LOAD_PREVIOUS_CONTEXT=True
+
+# Enable error recovery
+ENABLE_RETRY_LOGIC=True
+ENABLE_FALLBACK_STT=True
+
+# Enable wake word (requires Picovoice access key)
+ENABLE_WAKE_WORD=True
+PORCUPINE_ACCESS_KEY=your_key_here  # Get from https://console.picovoice.ai/
+WAKE_WORD_KEYWORD=jarvis
+WAKE_WORD_SENSITIVITY=0.5
+```
+
+**Get Picovoice Access Key:**
+1. Visit https://console.picovoice.ai/
+2. Sign up for a free account
+3. Create a new access key
+4. Copy the key to your `.env` file
+
 ## Usage
 
 ### Voice Mode (Default)
@@ -117,6 +156,13 @@ Speak naturally after the "Listening..." prompt. The assistant will:
 3. Process with the LLM
 4. Execute any requested actions
 5. Respond with synthesized speech
+
+**With Wake Word Enabled:**
+1. Wait for Jarvis to say "Listening for wake word..."
+2. Say "Hey Jarvis" (or your configured wake word)
+3. Give your command immediately after detection
+4. Jarvis processes and responds
+5. Returns to wake word listening
 
 ### Voice Mode with Terminal UI
 
@@ -208,22 +254,50 @@ Edit [.env](.env) to customize:
 - `ALLOWED_DIRECTORIES`: Comma-separated paths where file operations are allowed
 - `COMMAND_WHITELIST`: Comma-separated list of allowed commands
 
+### Phase 1 Settings (New!)
+
+#### Error Recovery
+- `ENABLE_RETRY_LOGIC`: Enable automatic retry with backoff (default: `True`)
+- `MAX_RETRY_ATTEMPTS`: Maximum retry attempts (default: `3`)
+- `RETRY_BACKOFF_FACTOR`: Backoff multiplier between retries (default: `2.0`)
+- `ENABLE_FALLBACK_STT`: Enable fallback to openai-whisper (default: `True`)
+- `ENABLE_OFFLINE_MODE`: Enable offline response caching (default: `True`)
+- `OFFLINE_RESPONSE_CACHE_SIZE`: Number of responses to cache (default: `50`)
+
+#### Conversation Persistence
+- `ENABLE_CONVERSATION_PERSISTENCE`: Save conversations to database (default: `True`)
+- `CONVERSATION_DB_PATH`: Path to SQLite database (default: `~/.local/share/jarvis/conversations.db`)
+- `LOAD_PREVIOUS_CONTEXT`: Load last conversation on startup (default: `True`)
+
+#### Wake Word Detection
+- `ENABLE_WAKE_WORD`: Enable hands-free wake word activation (default: `False`)
+- `PORCUPINE_ACCESS_KEY`: Picovoice access key from https://console.picovoice.ai/ (required if enabled)
+- `WAKE_WORD_KEYWORD`: Wake word to detect (default: `jarvis`, options: `computer`, `hey google`, etc.)
+- `WAKE_WORD_SENSITIVITY`: Detection sensitivity 0.0-1.0 (default: `0.5`)
+
+**Note**: Wake word detection requires a free Picovoice account. Visit https://console.picovoice.ai/ to get your access key.
+
 ## Project Structure
 
 ```
 Jarvis/
-├── main.py                 # Main orchestration loop
-├── config.py              # Configuration management
-├── audio_handler.py       # Audio I/O and VAD
-├── stt_module.py          # Speech-to-text (Whisper)
-├── llm_module.py          # LLM integration (Ollama)
-├── action_executor.py     # System operations executor
-├── tts_module.py          # Text-to-speech (Piper)
-├── setup_piper.py         # Piper installation script
-├── requirements.txt       # Python dependencies
-├── .env.example          # Example configuration
-├── .env                  # Your configuration (create this)
-└── piper/                # Piper binary and models (created by setup)
+├── main.py                   # Main orchestration loop
+├── config.py                 # Configuration management
+├── audio_handler.py          # Audio I/O, VAD, and wake word
+├── stt_module.py             # Speech-to-text with retry/fallback
+├── llm_module.py             # LLM integration with offline cache
+├── action_executor.py        # System operations with retry
+├── tts_module.py             # Text-to-speech with fallback
+├── error_recovery.py         # Retry and fallback utilities (Phase 1)
+├── persistence_module.py     # Conversation storage backend (Phase 1)
+├── wake_word_detector.py     # Wake word detection (Phase 1)
+├── tui.py                    # Terminal UI
+├── whitelist_manager.py      # Security whitelist management
+├── setup_piper.py            # Piper installation script
+├── requirements.txt          # Python dependencies
+├── .env.example              # Example configuration
+├── .env                      # Your configuration (create this)
+└── piper/                    # Piper binary and models
 ```
 
 ## Troubleshooting
@@ -381,16 +455,92 @@ def your_tool_name(self, param1: str) -> str:
     return "Result"
 ```
 
+## Testing
+
+Jarvis includes a comprehensive test suite to ensure reliability and correctness.
+
+### Running Tests
+
+**Run all tests with coverage:**
+```bash
+./run_tests.sh
+```
+
+**Run only unit tests:**
+```bash
+./run_tests.sh --unit
+```
+
+**Run tests without coverage:**
+```bash
+./run_tests.sh --no-coverage
+```
+
+**Verbose output:**
+```bash
+./run_tests.sh -v
+```
+
+**Run specific test file:**
+```bash
+pytest tests/test_error_recovery.py -v
+```
+
+**Run tests by marker:**
+```bash
+pytest -m unit                    # Only unit tests
+pytest -m integration             # Only integration tests
+pytest -m "not slow"              # Skip slow tests
+pytest -m requires_ollama         # Tests requiring Ollama
+```
+
+### Test Markers
+
+- `unit` - Unit tests (fast, isolated, mocked dependencies)
+- `integration` - Integration tests (slower, real dependencies)
+- `slow` - Tests that take significant time
+- `requires_audio` - Tests requiring audio hardware
+- `requires_ollama` - Tests requiring Ollama server
+- `requires_porcupine` - Tests requiring Porcupine access key
+
+### Coverage Report
+
+After running tests with coverage, open the HTML report:
+```bash
+xdg-open htmlcov/index.html
+```
+
+Target coverage: 80%+ for all modules
+
+### Test Structure
+
+```
+tests/
+├── conftest.py                    # Shared fixtures
+├── test_error_recovery.py         # Error recovery tests
+├── test_persistence_module.py     # Persistence backend tests
+├── test_wake_word_detector.py     # Wake word detection tests
+├── test_llm_module.py             # LLM and conversation tests
+├── test_stt_module.py             # Speech-to-text tests
+└── test_tts_module.py             # Text-to-speech tests
+```
+
 ## Contributing
 
 Contributions are welcome! Areas for improvement:
 
-- Wake word detection (e.g., "Hey Jarvis")
 - Multi-language support
 - Plugin architecture
 - Web UI
 - Home automation integration
 - Voice cloning for personalized TTS
+- Additional test coverage
+
+**Before submitting a PR:**
+1. Run the test suite: `./run_tests.sh`
+2. Ensure coverage remains above 80%
+3. Add tests for new features
+4. Update documentation
 
 ## License
 

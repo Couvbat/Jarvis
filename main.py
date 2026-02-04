@@ -1,6 +1,7 @@
 """Main orchestration loop for Jarvis voice assistant."""
 
 import sys
+from datetime import datetime
 from loguru import logger
 from config import settings
 from audio_handler import AudioHandler
@@ -9,6 +10,7 @@ from llm_module import LLMModule
 from action_executor import ActionExecutor
 from tts_module import TTSModule
 from tui import JarvisTUI
+from error_recovery import ServiceHealthChecker, degraded_mode
 
 
 class Jarvis:
@@ -27,20 +29,106 @@ class Jarvis:
         # Initialize components
         self.audio = AudioHandler()
         self.stt = STTModule()
-        self.llm = LLMModule()
+        
+        # Initialize LLM with persistence if enabled
+        enable_persistence = getattr(settings, 'enable_conversation_persistence', False)
+        self.llm = LLMModule(enable_persistence=enable_persistence)
+        
         self.executor = ActionExecutor(confirmation_callback=self._confirmation_callback)
         self.tts = TTSModule()
+        
+        # Generate session ID
+        self.session_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.llm.history.set_session_id(self.session_id)
+        
+        # Load previous context if enabled
+        if enable_persistence and getattr(settings, 'load_previous_context', False):
+            logger.info("Loading previous conversation context...")
+            if self.llm.history.load_last_session():
+                if self.use_tui:
+                    self.tui.add_system_message("✓ Loaded previous conversation")
+            else:
+                logger.info("No previous session found or failed to load")
         
         # Load models
         logger.info("Loading models (this may take a moment)...")
         self.stt.initialize()
         self.tts.initialize()
         
+        # Initialize wake word if enabled
+        if getattr(settings, 'enable_wake_word', False):
+            logger.info("Initializing wake word detection...")
+            access_key = getattr(settings, 'porcupine_access_key', None)
+            keyword = getattr(settings, 'wake_word_keyword', 'jarvis')
+            sensitivity = getattr(settings, 'wake_word_sensitivity', 0.5)
+            
+            try:
+                self.audio.initialize_wake_word(
+                    access_key=access_key,
+                    keyword=keyword,
+                    sensitivity=sensitivity
+                )
+                if self.use_tui:
+                    self.tui.add_system_message(f"✓ Wake word '{keyword}' enabled")
+            except Exception as e:
+                logger.error(f"Failed to initialize wake word: {e}")
+                if self.use_tui:
+                    self.tui.add_system_message("⚠ Wake word detection unavailable")
+        
+        # Perform health checks
+        self._perform_health_checks()
+        
         logger.info("Jarvis initialized and ready!")
         
         if self.use_tui:
             self.tui.update_status("Ready")
             self.tui.update_language(settings.whisper_language)
+    
+    def _perform_health_checks(self):
+        """Perform health checks on all services."""
+        logger.info("Performing service health checks...")
+        
+        health_status = []
+        
+        # Check Ollama service
+        if ServiceHealthChecker.check_ollama(settings.ollama_host):
+            logger.info("✓ Ollama service is healthy")
+            health_status.append(("Ollama", True))
+        else:
+            logger.warning("✗ Ollama service is not reachable")
+            health_status.append(("Ollama", False))
+            degraded_mode.mark_degraded('llm')
+            if self.use_tui:
+                self.tui.add_system_message("⚠ Warning: Ollama service unavailable - AI features degraded")
+        
+        # Check audio device
+        if ServiceHealthChecker.check_audio_device():
+            logger.info("✓ Audio devices are available")
+            health_status.append(("Audio", True))
+        else:
+            logger.warning("✗ No audio input device found")
+            health_status.append(("Audio", False))
+            if self.use_tui:
+                self.tui.add_system_message("⚠ Warning: No audio input device detected")
+        
+        # Check Piper TTS binary
+        if ServiceHealthChecker.check_file_exists(str(self.tts.piper_binary)):
+            logger.info("✓ Piper TTS binary found")
+            health_status.append(("Piper TTS", True))
+        else:
+            logger.warning("✗ Piper TTS binary not found")
+            health_status.append(("Piper TTS", False))
+            if self.use_tui:
+                self.tui.add_system_message("⚠ Warning: Piper TTS not found - will use fallback")
+        
+        # Log summary
+        healthy_count = sum(1 for _, healthy in health_status if healthy)
+        total_count = len(health_status)
+        logger.info(f"Health check complete: {healthy_count}/{total_count} services healthy")
+        
+        if healthy_count < total_count:
+            logger.warning("Some services are unavailable. Jarvis will operate in degraded mode for affected features.")
+
     
     def _confirmation_callback(self, action_description: str, item: str) -> tuple[bool, bool]:
         """
@@ -155,6 +243,23 @@ class Jarvis:
         
         try:
             while True:
+                # Wait for wake word if enabled
+                if getattr(settings, 'enable_wake_word', False) and self.audio.wake_word_detector:
+                    if not self.use_tui:
+                        logger.info("\n--- Waiting for wake word ---")
+                    
+                    if self.use_tui:
+                        self.tui.update_status("Waiting for wake word...")
+                    
+                    wake_word_detected = self.audio.listen_for_wake_word(timeout=None)
+                    
+                    if not wake_word_detected:
+                        continue  # Timeout or error, try again
+                    
+                    logger.info("Wake word detected!")
+                    if self.use_tui:
+                        self.tui.add_system_message("🎤 Wake word detected")
+                
                 if not self.use_tui:
                     logger.info("\n--- Ready for your command ---")
                 
@@ -310,6 +415,20 @@ class Jarvis:
         
         except KeyboardInterrupt:
             logger.info("\n\nShutting down Jarvis...")
+            
+            # Cleanup wake word detector
+            if self.audio.wake_word_detector:
+                self.audio.cleanup_wake_word()
+            
+            # Save conversation before exit
+            if getattr(settings, 'enable_conversation_persistence', False):
+                logger.info("Saving conversation...")
+                try:
+                    self.llm.history.save_to_storage(self.session_id)
+                    logger.info("Conversation saved successfully")
+                except Exception as e:
+                    logger.error(f"Failed to save conversation: {e}")
+                    
         except Exception as e:
             logger.error(f"Fatal error: {e}")
             raise
@@ -350,6 +469,15 @@ class Jarvis:
                     logger.error(f"Processing error: {e}")
                     print(f"\nJarvis: I encountered an error: {str(e)}")
         
+            # Save conversation before exit
+            if getattr(settings, 'enable_conversation_persistence', False):
+                logger.info("Saving conversation...")
+                try:
+                    self.llm.history.save_to_storage(self.session_id)
+                    logger.info("Conversation saved successfully")
+                except Exception as e:
+                    logger.error(f"Failed to save conversation: {e}")
+                    
         except Exception as e:
             logger.error(f"Fatal error: {e}")
             raise

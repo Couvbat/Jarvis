@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 from loguru import logger
 from config import settings
 from whitelist_manager import WhitelistManager
+from error_recovery import retry_with_backoff, RetryExhaustedError
 
 
 class ActionExecutor:
@@ -196,13 +197,35 @@ class ActionExecutor:
         if add_to_whitelist:
             self.whitelist_manager.add_to_whitelist("web_urls", whitelist_item)
         
+        # Try with retry logic if enabled
+        if settings.enable_retry_logic:
+            try:
+                return self._fetch_with_retry(url)
+            except RetryExhaustedError as e:
+                logger.error(f"All web fetch retry attempts failed: {e}")
+                return f"Error: Unable to fetch {url} after multiple attempts"
+        else:
+            return self._fetch_once(url)
+    
+    @retry_with_backoff(
+        max_attempts=3,
+        initial_delay=2.0,
+        backoff_factor=2.0,
+        exceptions=(requests.RequestException, ConnectionError, TimeoutError)
+    )
+    def _fetch_with_retry(self, url: str) -> str:
+        """Internal method with retry decorator for transient network errors."""
+        return self._fetch_once(url)
+    
+    def _fetch_once(self, url: str) -> str:
+        """Single fetch attempt without retry."""
         try:
             # Add timeout and user agent
             headers = {
                 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
             }
             
-            response = requests.get(url, headers=headers, timeout=10)
+            response = requests.get(url, headers=headers, timeout=15)
             response.raise_for_status()
             
             # Parse HTML

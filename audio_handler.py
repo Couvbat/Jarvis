@@ -8,6 +8,7 @@ from collections import deque
 from typing import Optional, Generator
 from loguru import logger
 from config import settings
+from wake_word_detector import create_wake_word_detector, WakeWordDetector
 
 
 class AudioHandler:
@@ -18,6 +19,7 @@ class AudioHandler:
         self.channels = settings.channels
         self.chunk_size = settings.chunk_size
         self.vad = webrtcvad.Vad(2)  # Aggressiveness 0-3, 2 is moderate
+        self.wake_word_detector: Optional[WakeWordDetector] = None
         
     def record_until_silence(
         self, 
@@ -127,3 +129,65 @@ class AudioHandler:
         except Exception as e:
             logger.error(f"Error loading audio: {e}")
             raise
+    
+    def initialize_wake_word(
+        self,
+        access_key: Optional[str] = None,
+        keyword: str = "jarvis",
+        sensitivity: float = 0.5
+    ):
+        """
+        Initialize wake word detection.
+        
+        Args:
+            access_key: Picovoice access key
+            keyword: Wake word keyword
+            sensitivity: Detection sensitivity (0.0-1.0)
+        """
+        try:
+            self.wake_word_detector = create_wake_word_detector(
+                access_key=access_key,
+                keyword=keyword,
+                sensitivity=sensitivity,
+                sample_rate=self.sample_rate,
+                fallback_to_simple=True
+            )
+            
+            if self.wake_word_detector:
+                self.wake_word_detector.initialize()
+                logger.info("Wake word detection ready")
+            else:
+                logger.warning("Wake word detection not available")
+                
+        except Exception as e:
+            logger.error(f"Failed to initialize wake word detection: {e}")
+            self.wake_word_detector = None
+    
+    def listen_for_wake_word(self, timeout: Optional[float] = None) -> bool:
+        """
+        Listen for wake word.
+        
+        Args:
+            timeout: Maximum time to listen (None = indefinite)
+            
+        Returns:
+            True if wake word detected, False otherwise
+        """
+        if self.wake_word_detector is None:
+            logger.warning("Wake word detector not initialized")
+            return False
+        
+        try:
+            return self.wake_word_detector.listen_for_wake_word(timeout)
+        except Exception as e:
+            logger.error(f"Wake word detection error: {e}")
+            return False
+    
+    def cleanup_wake_word(self):
+        """Cleanup wake word detector resources."""
+        if self.wake_word_detector:
+            try:
+                self.wake_word_detector.cleanup()
+                logger.debug("Wake word detector cleaned up")
+            except Exception as e:
+                logger.error(f"Wake word cleanup error: {e}")

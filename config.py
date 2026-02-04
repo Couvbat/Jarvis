@@ -40,6 +40,26 @@ class Settings(BaseSettings):
     allowed_directories: str = "/home,/tmp"
     command_whitelist: str = "ls,cat,mkdir,touch,rm,echo,code,firefox,nautilus"
     
+    # Error recovery settings (Phase 1)
+    enable_retry_logic: bool = True
+    max_retry_attempts: int = 3
+    retry_backoff_factor: float = 2.0
+    enable_fallback_stt: bool = True
+    enable_offline_mode: bool = True
+    offline_response_cache_size: int = 50
+    
+    # Conversation persistence settings (Phase 1)
+    enable_conversation_persistence: bool = True
+    conversation_db_path: str = str(Path.home() / ".local" / "share" / "jarvis" / "conversations.db")
+    load_previous_context: bool = True
+    save_frequency: int = 5  # Save every N messages (future feature)
+    
+    # Wake word settings (Phase 1)
+    enable_wake_word: bool = False  # Set to True to enable
+    porcupine_access_key: str = ""  # Get from https://console.picovoice.ai/
+    wake_word_keyword: str = "jarvis"  # Available: jarvis, computer, hey google, etc.
+    wake_word_sensitivity: float = 0.5  # 0.0-1.0, higher = more sensitive
+    
     # Logging
     log_level: str = "INFO"
     

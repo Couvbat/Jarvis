@@ -27,3 +27,18 @@ pydantic-settings>=2.1.0
 
 # Terminal UI
 rich>=13.7.0
+
+# Error Recovery (Phase 1)
+tenacity>=8.2.0
+openai-whisper>=20230918  # Fallback STT
+SpeechRecognition>=3.10.0  # Alternative STT
+
+# Wake Word Detection (Phase 1)
+pvporcupine>=2.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-mock>=3.12.0
+pytest-asyncio>=0.21.0
+freezegun>=1.2.0  # Time mocking for tests

@@ -1,22 +1,48 @@
 """LLM module with Ollama integration and function calling."""
 
 import json
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 import ollama
 from loguru import logger
 from config import settings
+from error_recovery import retry_with_backoff, RetryExhaustedError, degraded_mode, ServiceHealthChecker
+from persistence_module import SQLiteBackend, StorageBackend
 
 
 class ConversationHistory:
-    """Manages conversation history with size limits."""
+    """Manages conversation history with size limits and persistence."""
     
-    def __init__(self, max_history: int = 10):
+    def __init__(self, max_history: int = 10, storage_backend: Optional[StorageBackend] = None):
         self.max_history = max_history
-        self.messages: List[Dict[str, str]] = []
+        self.messages: List[Dict[str, Any]] = []
+        self.session_id: Optional[str] = None
+        self.started_at: Optional[str] = None
+        self.storage = storage_backend
         
-    def add_message(self, role: str, content: str):
-        """Add a message to history."""
-        self.messages.append({"role": role, "content": content})
+    def set_session_id(self, session_id: str):
+        """Set the current session ID."""
+        self.session_id = session_id
+        if not self.started_at:
+            self.started_at = datetime.now().isoformat()
+        logger.debug(f"Session ID set to: {session_id}")
+    
+    def add_message(self, role: str, content: str, metadata: Optional[Dict[str, Any]] = None):
+        """
+        Add a message to history with timestamp.
+        
+        Args:
+            role: Message role (system, user, assistant, tool)
+            content: Message content
+            metadata: Optional metadata
+        """
+        message = {
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now().isoformat(),
+            "metadata": metadata or {}
+        }
+        self.messages.append(message)
         
         # Keep only the system message and recent history
         if len(self.messages) > self.max_history + 1:  # +1 for system message
@@ -24,7 +50,21 @@ class ConversationHistory:
             self.messages = [self.messages[0]] + self.messages[-(self.max_history):]
     
     def get_messages(self) -> List[Dict[str, str]]:
-        """Get all messages."""
+        """
+        Get all messages in format expected by LLM.
+        
+        Returns:
+            List of messages with only role and content
+        """
+        return [{"role": msg["role"], "content": msg["content"]} for msg in self.messages]
+    
+    def get_full_messages(self) -> List[Dict[str, Any]]:
+        """
+        Get all messages with full metadata.
+        
+        Returns:
+            List of messages with timestamps and metadata
+        """
         return self.messages
     
     def clear(self):
@@ -33,6 +73,129 @@ class ConversationHistory:
             self.messages = [self.messages[0]]
         else:
             self.messages = []
+    
+    def save_to_storage(self, session_id: Optional[str] = None):
+        """
+        Save current session to persistent storage.
+        
+        Args:
+            session_id: Optional session ID (uses current if not provided)
+        """
+        if self.storage is None:
+            logger.warning("No storage backend configured, cannot save session")
+            return
+        
+        sid = session_id or self.session_id
+        if not sid:
+            logger.warning("No session ID set, cannot save")
+            return
+        
+        metadata = {
+            'started_at': self.started_at or datetime.now().isoformat(),
+            'ended_at': datetime.now().isoformat(),
+            'language': settings.whisper_language
+        }
+        
+        try:
+            self.storage.save_session(sid, self.messages, metadata)
+            logger.debug(f"Session {sid} saved to storage")
+        except Exception as e:
+            logger.error(f"Failed to save session: {e}")
+    
+    def load_from_storage(self, session_id: str):
+        """
+        Load a session from persistent storage.
+        
+        Args:
+            session_id: Session ID to load
+            
+        Returns:
+            True if loaded successfully, False otherwise
+        """
+        if self.storage is None:
+            logger.warning("No storage backend configured, cannot load session")
+            return False
+        
+        try:
+            session_data = self.storage.load_session(session_id)
+            if session_data:
+                self.messages = session_data['messages']
+                self.session_id = session_id
+                self.started_at = session_data['started_at']
+                logger.info(f"Loaded session {session_id} with {len(self.messages)} messages")
+                return True
+            else:
+                logger.warning(f"Session {session_id} not found")
+                return False
+        except Exception as e:
+            logger.error(f"Failed to load session: {e}")
+            return False
+    
+    def load_last_session(self) -> bool:
+        """
+        Load the most recent session from storage.
+        
+        Returns:
+            True if loaded successfully, False otherwise
+        """
+        if self.storage is None:
+            return False
+        
+        try:
+            # Try to get last session ID
+            if hasattr(self.storage, 'get_last_session_id'):
+                last_session_id = self.storage.get_last_session_id()
+                if last_session_id:
+                    return self.load_from_storage(last_session_id)
+            
+            # Fallback: list sessions and load first
+            sessions = self.storage.list_sessions(limit=1)
+            if sessions:
+                return self.load_from_storage(sessions[0]['session_id'])
+            
+            return False
+        except Exception as e:
+            logger.error(f"Failed to load last session: {e}")
+            return False
+    
+    def list_recent_sessions(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        List recent conversation sessions.
+        
+        Args:
+            limit: Maximum number of sessions to return
+            
+        Returns:
+            List of session summaries
+        """
+        if self.storage is None:
+            return []
+        
+        try:
+            return self.storage.list_sessions(limit)
+        except Exception as e:
+            logger.error(f"Failed to list sessions: {e}")
+            return []
+    
+    def search_history(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Search conversation history for specific content.
+        
+        Args:
+            query: Search query
+            limit: Maximum results
+            
+        Returns:
+            List of matching sessions
+        """
+        if self.storage is None:
+            return []
+        
+        try:
+            return self.storage.search_sessions(query, limit)
+        except Exception as e:
+            logger.error(f"Failed to search history: {e}")
+            return []
 
 
 class LLMModule:
@@ -121,19 +284,44 @@ IMPORTANT: Respond in the same language the user is speaking. If they speak Fren
         }
     ]
     
-    def __init__(self):
+    def __init__(self, enable_persistence: bool = False):
+        """
+        Initialize LLM module.
+        
+        Args:
+            enable_persistence: Enable conversation persistence
+        """
         self.host = settings.ollama_host
         self.model = settings.ollama_model
         self.temperature = settings.llm_temperature
         self.max_tokens = settings.llm_max_tokens
-        self.history = ConversationHistory(settings.max_conversation_history)
+        
+        # Initialize storage backend if persistence is enabled
+        storage = None
+        if enable_persistence:
+            try:
+                storage = SQLiteBackend(settings.conversation_db_path)
+                logger.info("Conversation persistence enabled")
+            except Exception as e:
+                logger.error(f"Failed to initialize persistence: {e}")
+                logger.warning("Continuing without persistence")
+        
+        self.history = ConversationHistory(
+            max_history=settings.max_conversation_history,
+            storage_backend=storage
+        )
+        self._offline_cache = {}  # Simple cache for offline mode
         
         # Initialize with system prompt
         self.history.add_message("system", self.SYSTEM_PROMPT)
     
+    def check_health(self) -> bool:
+        """Check if Ollama service is available."""
+        return ServiceHealthChecker.check_ollama(self.host)
+    
     def chat(self, user_message: str) -> Dict[str, Any]:
         """
-        Send a message to the LLM and get response.
+        Send a message to the LLM and get response with retry logic.
         
         Args:
             user_message: The user's message
@@ -146,6 +334,37 @@ IMPORTANT: Respond in the same language the user is speaking. If they speak Fren
         # Add user message to history
         self.history.add_message("user", user_message)
         
+        # Check if offline mode and try cache first
+        if degraded_mode.is_offline() and settings.enable_offline_mode:
+            cached_response = self._get_cached_response(user_message)
+            if cached_response:
+                logger.info("Using cached response (offline mode)")
+                return cached_response
+        
+        # Try with retry logic if enabled
+        if settings.enable_retry_logic:
+            try:
+                return self._chat_with_retry()
+            except RetryExhaustedError as e:
+                logger.error(f"All LLM retry attempts failed: {e}")
+                degraded_mode.mark_degraded('llm')
+                # Return degraded response
+                return self._get_degraded_response(user_message)
+        else:
+            return self._chat_once()
+    
+    @retry_with_backoff(
+        max_attempts=3,
+        initial_delay=2.0,
+        backoff_factor=2.0,
+        exceptions=(Exception,)
+    )
+    def _chat_with_retry(self) -> Dict[str, Any]:
+        """Internal method with retry decorator."""
+        return self._chat_once()
+    
+    def _chat_once(self) -> Dict[str, Any]:
+        """Single chat attempt without retry."""
         try:
             # Call Ollama API
             response = ollama.chat(
@@ -174,13 +393,68 @@ IMPORTANT: Respond in the same language the user is speaking. If they speak Fren
             if tool_calls:
                 logger.info(f"Tool calls: {len(tool_calls)}")
             
+            # Mark as recovered if it was degraded
+            if degraded_mode.is_degraded('llm'):
+                degraded_mode.mark_recovered('llm')
+            
+            # Cache common responses if offline mode is enabled
+            if settings.enable_offline_mode:
+                self._cache_response(self.history.messages[-2]["content"], result)
+            
             return result
             
         except Exception as e:
             logger.error(f"LLM error: {e}")
-            error_response = "I'm sorry, I encountered an error processing your request."
-            self.history.add_message("assistant", error_response)
-            return {"response": error_response, "tool_calls": None}
+            raise
+    
+    def _get_cached_response(self, user_message: str) -> Optional[Dict[str, Any]]:
+        """Get cached response for common queries."""
+        # Normalize message
+        normalized = user_message.lower().strip()
+        
+        # Check cache
+        return self._offline_cache.get(normalized)
+    
+    def _cache_response(self, user_message: str, response: Dict[str, Any]):
+        """Cache response for offline use."""
+        # Normalize message
+        normalized = user_message.lower().strip()
+        
+        # Only cache non-tool responses
+        if not response.get("tool_calls"):
+            # Limit cache size
+            if len(self._offline_cache) >= settings.offline_response_cache_size:
+                # Remove oldest (FIFO)
+                self._offline_cache.pop(next(iter(self._offline_cache)))
+            
+            self._offline_cache[normalized] = response
+    
+    def _get_degraded_response(self, user_message: str) -> Dict[str, Any]:
+        """Get response when LLM is unavailable."""
+        # Try cache first
+        cached = self._get_cached_response(user_message)
+        if cached:
+            logger.info("Using cached response (degraded mode)")
+            return cached
+        
+        # Simple rule-based responses for common patterns
+        normalized = user_message.lower()
+        
+        if any(word in normalized for word in ['hello', 'hi', 'hey', 'bonjour', 'salut']):
+            response = "Hello! I'm currently experiencing connection issues, but I'm still here to help where I can."
+        elif any(word in normalized for word in ['exit', 'quit', 'goodbye', 'bye', 'au revoir']):
+            response = "Goodbye! I hope to be fully operational soon."
+        elif any(word in normalized for word in ['help', 'aide']):
+            response = "I'm currently in degraded mode. My AI capabilities are limited, but I can still try to help with basic tasks."
+        else:
+            response = "I'm sorry, I'm currently unable to process complex requests. My AI service is unavailable. Please try again later."
+        
+        error_response = {
+            "response": response,
+            "tool_calls": None
+        }
+        self.history.add_message("assistant", response)
+        return error_response
     
     def add_tool_result(self, tool_name: str, result: str):
         """Add tool execution result to conversation."""

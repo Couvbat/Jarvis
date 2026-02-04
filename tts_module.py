@@ -7,6 +7,7 @@ from pathlib import Path
 from loguru import logger
 from config import settings
 import soundfile as sf
+from error_recovery import retry_with_backoff, RetryExhaustedError, degraded_mode
 
 
 class TTSModule:
@@ -88,7 +89,7 @@ class TTSModule:
     
     def synthesize(self, text: str) -> np.ndarray:
         """
-        Convert text to speech.
+        Convert text to speech with retry logic and fallback.
         
         Args:
             text: Text to synthesize
@@ -102,6 +103,35 @@ class TTSModule:
         
         logger.info(f"Synthesizing: {text[:50]}...")
         
+        # Try with retry logic if enabled
+        if settings.enable_retry_logic:
+            try:
+                return self._synthesize_with_retry(text)
+            except RetryExhaustedError as e:
+                logger.error(f"All TTS retry attempts failed: {e}")
+                degraded_mode.mark_degraded('tts')
+                # Try fallback TTS
+                try:
+                    return self._fallback_synthesize(text)
+                except Exception as fallback_error:
+                    logger.error(f"Fallback TTS also failed: {fallback_error}")
+                    # Return empty array - caller will handle text output
+                    return np.array([], dtype=np.int16)
+        else:
+            return self._synthesize_once(text)
+    
+    @retry_with_backoff(
+        max_attempts=2,
+        initial_delay=1.0,
+        backoff_factor=2.0,
+        exceptions=(Exception,)
+    )
+    def _synthesize_with_retry(self, text: str) -> np.ndarray:
+        """Internal method with retry decorator."""
+        return self._synthesize_once(text)
+    
+    def _synthesize_once(self, text: str) -> np.ndarray:
+        """Single synthesis attempt without retry."""
         try:
             # Create temporary files for input and output
             with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as text_file:
@@ -146,6 +176,10 @@ class TTSModule:
             
             logger.info(f"Synthesized {len(audio_data) / sample_rate:.2f}s of audio")
             
+            # Mark as recovered if it was degraded
+            if degraded_mode.is_degraded('tts'):
+                degraded_mode.mark_recovered('tts')
+            
             return audio_data
             
         except subprocess.TimeoutExpired:
@@ -153,6 +187,54 @@ class TTSModule:
             raise RuntimeError("TTS synthesis timed out")
         except Exception as e:
             logger.error(f"TTS error: {e}")
+            raise
+    
+    def _fallback_synthesize(self, text: str) -> np.ndarray:
+        """
+        Fallback TTS using espeak (basic but always available on Linux).
+        
+        Args:
+            text: Text to synthesize
+            
+        Returns:
+            Audio data as numpy array
+        """
+        try:
+            logger.info("Using fallback TTS (espeak)")
+            
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as wav_file:
+                wav_file_path = wav_file.name
+            
+            # Run espeak
+            cmd = [
+                "espeak",
+                "-w", wav_file_path,
+                text
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=30
+            )
+            
+            if result.returncode != 0:
+                raise RuntimeError(f"espeak failed: {result.stderr.decode()}")
+            
+            # Load generated audio
+            audio_data, sample_rate = sf.read(wav_file_path, dtype='int16')
+            
+            # Clean up
+            Path(wav_file_path).unlink()
+            
+            logger.info("Fallback TTS synthesis completed")
+            return audio_data
+            
+        except FileNotFoundError:
+            logger.error("Fallback TTS (espeak) not available")
+            raise
+        except Exception as e:
+            logger.error(f"Fallback TTS error: {e}")
             raise
     
     def synthesize_to_file(self, text: str, output_file: str):
