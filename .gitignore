@@ -1,0 +1,43 @@
+# Jarvis
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Environment
+.env
+
+# Whitelist
+command_whitelist.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Models and data
+*.onnx
+*.pt
+*.pth
+*.bin
+models/
+piper/*.tar.gz
+piper/piper/
+
+# Audio files
+*.wav
+*.mp3
+*.flac
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

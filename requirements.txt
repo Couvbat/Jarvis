@@ -1,0 +1,29 @@
+# Audio processing
+sounddevice>=0.4.6
+soundfile>=0.12.1
+numpy>=1.24.0
+webrtcvad>=2.0.10
+
+# Speech-to-Text
+faster-whisper>=0.10.0
+
+# LLM Integration
+ollama>=0.1.0
+requests>=2.31.0
+
+# Text-to-Speech (Piper will be installed separately)
+# Piper TTS - binary installation via script
+
+# System integration
+psutil>=5.9.0
+beautifulsoup4>=4.12.0
+python-xdg>=0.28
+
+# Utilities
+pydantic>=2.5.0
+python-dotenv>=1.0.0
+loguru>=0.7.0
+pydantic-settings>=2.1.0
+
+# Terminal UI
+rich>=13.7.0
