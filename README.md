@@ -148,11 +148,24 @@ WAKE_WORD_SENSITIVITY=0.5
 
 ## Usage
 
-### Voice Mode (Default)
+### Default Mode (Voice + TUI)
 
 ```bash
 python main.py
 ```
+
+The Terminal UI launches by default, providing a rich interface with:
+
+- **Header**: Current status and language
+- **Conversation Panel**: Complete chat history with timestamps
+- **Actions Panel**: Real-time log of system operations and tools
+- **Help Panel**: Quick reference for commands
+
+**TUI Features:**
+- Say "show options" or "open settings" to access the interactive options menu
+- Real-time status updates
+- Color-coded actions (green=success, red=error, yellow=info)
+- Persistent display of conversation context
 
 Speak naturally after the "Listening..." prompt. The assistant will:
 
@@ -170,20 +183,13 @@ Speak naturally after the "Listening..." prompt. The assistant will:
 4. Jarvis processes and responds
 5. Returns to wake word listening
 
-### Voice Mode with Terminal UI
+### Voice Mode without TUI
 
-For a rich terminal interface showing chat history and actions:
+For voice mode with plain log output instead of the Terminal UI:
 
 ```bash
-python main.py --tui
+python main.py --no-tui
 ```
-
-The TUI displays:
-
-- **Header**: Current status and language
-- **Conversation Panel**: Complete chat history with timestamps
-- **Actions Panel**: Real-time log of system operations and tools
-- **Help Panel**: Quick reference for commands
 
 ### Text Mode
 
@@ -227,6 +233,25 @@ python main.py --text
 - "In English"
 
 You can also set the default language in `.env` with `WHISPER_LANGUAGE=fr` or `WHISPER_LANGUAGE=en`.
+
+### Options Menu (TUI Mode)
+
+When using TUI mode (`python main.py --tui`), you can access an interactive options menu:
+
+**Voice Command:**
+- Say "show options", "open settings", or "show settings"
+
+**Text Mode:**
+- Type `/options`
+
+The options menu allows you to:
+- 🌐 **Switch Language** - Toggle between English and French
+- 🗑️ **Clear Conversation** - Reset the current conversation history
+- 📋 **Clear Actions Log** - Clear the actions panel
+- 💾 **Save Current Session** - Manually save the conversation
+- ℹ️ **View System Info** - Check status of all components (Ollama, Whisper, Piper, Audio, Wake Word)
+
+All changes take effect immediately without restarting Jarvis.
 
 ### Exit Commands
 

@@ -230,6 +230,54 @@ class Jarvis:
         
         return response_text
     
+    def _handle_options_menu(self):
+        """Handle options menu display and updates."""
+        if not self.use_tui:
+            logger.info("Options menu is only available in TUI mode (use --tui flag)")
+            return
+        
+        # Prepare current settings
+        current_settings = {
+            'language': settings.whisper_language,
+            'wake_word_enabled': getattr(settings, 'enable_wake_word', False),
+            'persistence_enabled': getattr(settings, 'enable_conversation_persistence', False),
+            'retry_enabled': getattr(settings, 'enable_retry_logic', True),
+            'ollama_healthy': not degraded_mode.is_degraded('llm'),
+            'stt_loaded': hasattr(self.stt, 'model') and self.stt.model is not None,
+            'tts_loaded': hasattr(self.tts, 'piper_binary'),
+            'audio_available': True  # Assume true if we got here
+        }
+        
+        # Show options menu
+        updated_settings = self.tui.show_options_menu(current_settings)
+        
+        if updated_settings:
+            # Apply language change
+            if updated_settings['language'] != settings.whisper_language:
+                self.stt.set_language(updated_settings['language'])
+                settings.whisper_language = updated_settings['language']
+                self.tui.update_language(updated_settings['language'])
+                logger.info(f"Language changed to: {updated_settings['language']}")
+            
+            # Handle clear conversation request
+            if updated_settings.get('clear_conversation', False):
+                self.llm.reset_conversation()
+                logger.info("Conversation cleared")
+            
+            # Handle save session request
+            if updated_settings.get('save_session', False):
+                try:
+                    self.llm.history.save_to_storage()
+                    self.tui.add_system_message("✓ Session saved")
+                    logger.info("Session saved")
+                except Exception as e:
+                    self.tui.add_system_message(f"⚠ Save failed: {e}")
+                    logger.error(f"Failed to save session: {e}")
+        
+        # Reset status
+        if self.use_tui:
+            self.tui.update_status("Ready")
+    
     def run_interactive(self):
         """Run in interactive voice mode."""
         if not self.use_tui:
@@ -360,6 +408,12 @@ class Jarvis:
                         self.tui.update_status("Ready")
                     continue
                 
+                # Check for options menu command
+                if "show options" in lower_text or "open settings" in lower_text or "open options" in lower_text or "show settings" in lower_text:
+                    logger.info("Options menu requested")
+                    self._handle_options_menu()
+                    continue
+                
                 # Check for exit commands
                 if any(cmd in lower_text for cmd in ["exit", "quit", "goodbye", "stop", "au revoir", "arrête"]):
                     logger.info("Exit command detected")
@@ -440,7 +494,7 @@ class Jarvis:
         """Run in text-only mode (no voice I/O)."""
         logger.info("\n" + "="*50)
         logger.info("Jarvis Voice Assistant - Text Mode")
-        logger.info("Type 'exit' to quit")
+        logger.info("Type 'exit' to quit, '/options' for settings")
         logger.info("="*50 + "\n")
         
         try:
@@ -455,6 +509,11 @@ class Jarvis:
                     if user_text.lower() in ["exit", "quit", "goodbye"]:
                         print("Jarvis: Goodbye!")
                         break
+                    
+                    # Check for options command
+                    if user_text.lower() == "/options":
+                        self._handle_options_menu()
+                        continue
                     
                 except KeyboardInterrupt:
                     print("\n\nJarvis: Goodbye!")
@@ -487,20 +546,21 @@ def main():
     """Main entry point."""
     # Check command line arguments
     mode = "voice"
-    use_tui = False
+    use_tui = True  # TUI is the default
     
     if len(sys.argv) > 1:
         if sys.argv[1] == "--text":
             mode = "text"
-        elif sys.argv[1] == "--tui":
+            use_tui = False
+        elif sys.argv[1] == "--no-tui":
             mode = "voice"
-            use_tui = True
+            use_tui = False
         elif sys.argv[1] == "--help":
             print("Jarvis Voice Assistant")
             print("\nUsage:")
-            print("  python main.py          # Voice mode (default)")
-            print("  python main.py --tui    # Voice mode with Terminal UI")
-            print("  python main.py --text   # Text-only mode")
+            print("  python main.py          # Voice mode with Terminal UI (default)")
+            print("  python main.py --text   # Text-only mode (no voice, no TUI)")
+            print("  python main.py --no-tui # Voice mode without Terminal UI")
             print("  python main.py --help   # Show this help")
             return
     

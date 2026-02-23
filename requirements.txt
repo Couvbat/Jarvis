@@ -17,7 +17,7 @@ requests>=2.31.0
 # System integration
 psutil>=5.9.0
 beautifulsoup4>=4.12.0
-python-xdg>=0.28
+# python-xdg>=0.28  # Optional, not available for Python 3.14 yet
 
 # Utilities
 pydantic>=2.5.0

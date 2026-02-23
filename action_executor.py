@@ -13,6 +13,10 @@ from whitelist_manager import WhitelistManager
 from error_recovery import retry_with_backoff, RetryExhaustedError
 
 
+# Commands that always require confirmation, even if whitelisted
+DANGEROUS_COMMANDS = {'rm', 'rmdir', 'shred', 'dd', 'mkfs', 'fdisk', 'kill', 'killall', 'pkill', 'chmod', 'chown'}
+
+
 class ActionExecutor:
     """Executes system actions with safety validation."""
     
@@ -22,7 +26,7 @@ class ActionExecutor:
         self.whitelist_manager = WhitelistManager()
         self.confirmation_callback = confirmation_callback
     
-    def _request_confirmation(self, category: str, action_description: str, item: str) -> tuple[bool, bool]:
+    def _request_confirmation(self, category: str, action_description: str, item: str, force: bool = False) -> tuple[bool, bool]:
         """
         Request user confirmation for an action.
         
@@ -30,14 +34,18 @@ class ActionExecutor:
             category: Whitelist category (file_operations, applications, web_urls)
             action_description: Human-readable description of the action
             item: The item to potentially whitelist
+            force: If True, always prompt even if whitelisted (for dangerous operations)
             
         Returns:
             Tuple of (execute_action, add_to_whitelist)
         """
-        # Check if already whitelisted
-        if self.whitelist_manager.is_whitelisted(category, item):
+        # Check if already whitelisted (unless forced)
+        if not force and self.whitelist_manager.is_whitelisted(category, item):
             logger.info(f"Action auto-approved (whitelisted): {action_description}")
             return (True, False)
+        
+        if force:
+            logger.warning(f"Dangerous operation requires confirmation: {action_description}")
         
         # Request confirmation via callback
         if self.confirmation_callback:
@@ -93,14 +101,16 @@ class ActionExecutor:
             return f"Error: Path '{path}' is not in allowed directories"
         
         # Request confirmation for destructive operations
-        if operation in ["delete_file", "create_file"]:
+        if operation in ["delete_file", "delete_directory", "create_file"]:
+            is_destructive = operation.startswith("delete")
             action_desc = f"{operation} on {file_path}"
             whitelist_item = f"{operation}:{file_path.parent}"
             
             execute, add_to_whitelist = self._request_confirmation(
                 "file_operations",
                 action_desc,
-                whitelist_item
+                whitelist_item,
+                force=is_destructive
             )
             
             if not execute:
@@ -273,15 +283,20 @@ class ActionExecutor:
         if base_command not in self.command_whitelist:
             return f"Error: Command '{base_command}' is not in whitelist"
         
-        # Request confirmation
+        # Request confirmation (always for dangerous commands)
         cmd_with_args = f"{application} {' '.join(args)}" if args else application
         action_desc = f"Launch: {cmd_with_args}"
         whitelist_item = cmd_with_args
+        is_dangerous = base_command in DANGEROUS_COMMANDS
+        
+        if is_dangerous:
+            action_desc = f"⚠ DANGEROUS: {cmd_with_args}"
         
         execute, add_to_whitelist = self._request_confirmation(
             "applications",
             action_desc,
-            whitelist_item
+            whitelist_item,
+            force=is_dangerous
         )
         
         if not execute:

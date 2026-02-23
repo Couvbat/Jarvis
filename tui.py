@@ -150,9 +150,11 @@ class JarvisTUI:
         """Create the help/commands panel."""
         help_text = Text()
         help_text.append("Commands: ", style="bold")
+        help_text.append("/options", style="cyan")
+        help_text.append(" | ", style="dim")
         help_text.append("exit/quit/goodbye", style="cyan")
         help_text.append(" | ", style="dim")
-        help_text.append("switch to french/english", style="cyan")
+        help_text.append("switch language", style="cyan")
         help_text.append(" | ", style="dim")
         help_text.append("Ctrl+C to stop", style="red")
         
@@ -348,4 +350,160 @@ class JarvisTUI:
             box=box.DOUBLE,
             border_style="cyan",
             padding=(2, 4)
+        ))
+    
+    def show_options_menu(self, current_settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Show options menu and return updated settings.
+        
+        Args:
+            current_settings: Dictionary of current settings
+            
+        Returns:
+            Dictionary of updated settings or None if cancelled
+        """
+        if self.live:
+            self.live.stop()
+        
+        self.console.clear()
+        self.console.print()
+        
+        # Display header
+        header = Text()
+        header.append("⚙️  ", style="bold yellow")
+        header.append("JARVIS OPTIONS", style="bold white")
+        
+        self.console.print(Panel(
+            Align.center(header),
+            border_style="yellow",
+            box=box.DOUBLE
+        ))
+        
+        while True:
+            self.console.print()
+            
+            # Current settings display
+            settings_table = Table(
+                show_header=False,
+                box=box.SIMPLE,
+                padding=(0, 2)
+            )
+            settings_table.add_column("Setting", style="cyan", width=30)
+            settings_table.add_column("Value", style="white")
+            
+            settings_table.add_row(
+                "Language",
+                current_settings.get('language', 'en').upper()
+            )
+            settings_table.add_row(
+                "Wake Word Detection",
+                "Enabled" if current_settings.get('wake_word_enabled', False) else "Disabled"
+            )
+            settings_table.add_row(
+                "Conversation Persistence",
+                "Enabled" if current_settings.get('persistence_enabled', False) else "Disabled"
+            )
+            settings_table.add_row(
+                "Retry/Fallback Logic",
+                "Enabled" if current_settings.get('retry_enabled', True) else "Disabled"
+            )
+            
+            self.console.print(Panel(
+                settings_table,
+                title="Current Settings",
+                border_style="blue"
+            ))
+            
+            # Menu options
+            self.console.print("\n[bold]Available Options:[/bold]\n")
+            self.console.print("  [cyan]1[/cyan] - Switch Language (EN ↔ FR)")
+            self.console.print("  [cyan]2[/cyan] - Clear Conversation History")
+            self.console.print("  [cyan]3[/cyan] - Clear Actions Log")
+            self.console.print("  [cyan]4[/cyan] - Save Current Session")
+            self.console.print("  [cyan]5[/cyan] - View System Info")
+            self.console.print("  [cyan]0[/cyan] - Back to Chat")
+            self.console.print()
+            
+            choice = self.console.input("[bold]Select option[/bold] [dim](0-5)[/dim]: ").strip()
+            
+            if choice == '0':
+                # Return to chat
+                break
+            elif choice == '1':
+                # Toggle language
+                current_lang = current_settings.get('language', 'en')
+                new_lang = 'fr' if current_lang == 'en' else 'en'
+                current_settings['language'] = new_lang
+                self.current_language = new_lang
+                self.console.print(f"\n[green]✓[/green] Language changed to: {new_lang.upper()}")
+                self.console.input("\n[dim]Press Enter to continue...[/dim]")
+                self.console.clear()
+                self.console.print()
+            elif choice == '2':
+                # Clear conversation
+                confirm = self.console.input("\n[yellow]Clear conversation history? (y/n):[/yellow] ").lower()
+                if confirm == 'y':
+                    self.clear_history()
+                    current_settings['clear_conversation'] = True
+                    self.console.print("[green]✓[/green] Conversation history cleared")
+                else:
+                    self.console.print("[dim]Cancelled[/dim]")
+                self.console.input("\n[dim]Press Enter to continue...[/dim]")
+                self.console.clear()
+                self.console.print()
+            elif choice == '3':
+                # Clear actions
+                self.clear_actions()
+                self.console.print("\n[green]✓[/green] Actions log cleared")
+                self.console.input("\n[dim]Press Enter to continue...[/dim]")
+                self.console.clear()
+                self.console.print()
+            elif choice == '4':
+                # Save session
+                current_settings['save_session'] = True
+                self.console.print("\n[green]✓[/green] Session will be saved")
+                self.console.input("\n[dim]Press Enter to continue...[/dim]")
+                self.console.clear()
+                self.console.print()
+            elif choice == '5':
+                # Show system info
+                self._show_system_info(current_settings)
+                self.console.input("\n[dim]Press Enter to continue...[/dim]")
+                self.console.clear()
+                self.console.print()
+            else:
+                self.console.print("[red]Invalid option. Please choose 0-5.[/red]")
+                self.console.input("\n[dim]Press Enter to continue...[/dim]")
+                self.console.clear()
+                self.console.print()
+        
+        if self.live:
+            self.live.start()
+        
+        return current_settings
+    
+    def _show_system_info(self, settings: Dict[str, Any]):
+        """Display system information."""
+        self.console.print()
+        
+        info_table = Table(
+            show_header=True,
+            header_style="bold magenta",
+            box=box.ROUNDED
+        )
+        info_table.add_column("Component", style="cyan")
+        info_table.add_column("Status", style="white")
+        
+        # Add component statuses
+        info_table.add_row("Ollama LLM", "[green]✓[/green] Connected" if settings.get('ollama_healthy', True) else "[red]✗[/red] Disconnected")
+        info_table.add_row("Whisper STT", "[green]✓[/green] Loaded" if settings.get('stt_loaded', True) else "[yellow]⚠[/yellow] Not loaded")
+        info_table.add_row("Piper TTS", "[green]✓[/green] Loaded" if settings.get('tts_loaded', True) else "[yellow]⚠[/yellow] Not loaded")
+        info_table.add_row("Audio Device", "[green]✓[/green] Available" if settings.get('audio_available', True) else "[red]✗[/red] Not available")
+        
+        if settings.get('wake_word_enabled', False):
+            info_table.add_row("Wake Word", "[green]✓[/green] Active")
+        
+        self.console.print(Panel(
+            info_table,
+            title="System Status",
+            border_style="magenta"
         ))
