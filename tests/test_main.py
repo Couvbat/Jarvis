@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 import main as main_module
-from main import Jarvis
+from main import Jarvis, is_exit_command, normalise_utterance
 
 
 class FakeAudio:
@@ -110,6 +110,58 @@ def wiring(monkeypatch):
 @pytest.fixture
 def jarvis(wiring):
     return Jarvis(use_tui=False)
+
+
+class TestUtteranceNormalisation:
+    @pytest.mark.parametrize("raw,expected", [
+        ("Stop.", "stop"),
+        ("Au revoir !", "au revoir"),
+        ("ARRÊTE", "arrete"),
+        ("Arrête-toi", "arrete toi"),
+        ("  spaced   out  ", "spaced out"),
+        ("s'il te plaît", "s il te plait"),
+        ("Crée un fichier café.txt", "cree un fichier cafe txt"),
+    ])
+    def test_normalisation(self, raw, expected):
+        assert normalise_utterance(raw) == expected
+
+
+class TestExitCommand:
+    @pytest.mark.parametrize("phrase", [
+        "exit", "quit", "stop", "goodbye", "bye",
+        "au revoir", "arrête", "arrête-toi",
+    ])
+    def test_bare_commands_quit(self, phrase):
+        assert is_exit_command(phrase) is True
+
+    @pytest.mark.parametrize("phrase", [
+        "Stop.", "STOP", "Au revoir !", "  quit  ",
+    ])
+    def test_case_accents_and_punctuation_are_tolerated(self, phrase):
+        assert is_exit_command(phrase) is True
+
+    @pytest.mark.parametrize("phrase", [
+        "Jarvis, stop", "stop jarvis", "ok quit",
+        "stop please", "arrête s'il te plaît", "quit now",
+        "Jarvis, stop please",
+    ])
+    def test_address_and_politeness_are_stripped(self, phrase):
+        assert is_exit_command(phrase) is True
+
+    @pytest.mark.parametrize("phrase", [
+        "stop the music please",
+        "arrête la musique",
+        "don't stop the recording",
+        "je ne veux pas quitter",
+        "goodbye everyone, now write that to a file",
+        "how do I exit vim",
+        "crée un fichier stop.txt",
+        "",
+        "   ",
+    ])
+    def test_a_sentence_merely_containing_the_word_does_not_quit(self, phrase):
+        """This is the whole point: "stop" is a common word in real requests."""
+        assert is_exit_command(phrase) is False
 
 
 class TestStartup:
@@ -537,10 +589,8 @@ def dict_events(events):
 # Known gaps
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.xfail(strict=True, reason="BUG-22: exit words are matched as substrings")
 def test_a_sentence_containing_stop_is_not_an_exit_command(wiring):
-    """'stop' matches anywhere in the transcript, so "arrête la musique",
-    "stop the timer" or any sentence containing the word quits Jarvis."""
+    """End to end: a request that merely contains "stop" reaches the LLM."""
     wiring["stt"].script = ["stop the music please", "exit"]
     instance = Jarvis(use_tui=False)
     instance.run_interactive()

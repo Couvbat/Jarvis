@@ -1,6 +1,7 @@
 """Main orchestration loop for Jarvis voice assistant."""
 
 import sys
+import unicodedata
 from loguru import logger
 from config import settings
 from audio_handler import AudioHandler
@@ -9,6 +10,50 @@ from llm_module import LLMModule
 from action_executor import ActionExecutor
 from tts_module import TTSModule
 from tui import JarvisTUI
+
+
+#: Utterances that end the session. Matched against the whole normalised
+#: utterance, never as a substring: "stop" appears in plenty of requests that
+#: are not a request to quit.
+EXIT_COMMANDS = frozenset({
+    "exit", "quit", "stop", "goodbye", "good bye", "bye", "bye bye", "see you",
+    "au revoir", "arrete", "arrete toi", "a plus",
+})
+
+#: Trailing politeness that does not change the meaning of a command.
+_TRAILING_FILLER = ("s il te plait", "s il vous plait", "please", "now", "maintenant")
+
+#: Ways of addressing the assistant, at either end of a command.
+_ADDRESS = ("jarvis", "ok", "okay", "hey")
+
+
+def normalise_utterance(text: str) -> str:
+    """Lowercase, drop accents and punctuation, collapse whitespace.
+
+    Whisper's output varies in accents and punctuation between runs, so
+    commands are compared on this normalised form.
+    """
+    decomposed = unicodedata.normalize("NFD", text.lower())
+    unaccented = "".join(c for c in decomposed if not unicodedata.combining(c))
+    cleaned = "".join(c if c.isalnum() or c.isspace() else " " for c in unaccented)
+    return " ".join(cleaned.split())
+
+
+def is_exit_command(text: str) -> bool:
+    """True when the whole utterance is a request to stop."""
+    phrase = normalise_utterance(text)
+
+    for filler in _TRAILING_FILLER:
+        if phrase.endswith(f" {filler}"):
+            phrase = phrase[: -len(filler) - 1].strip()
+
+    for address in _ADDRESS:
+        if phrase.startswith(f"{address} "):
+            phrase = phrase[len(address) + 1:].strip()
+        if phrase.endswith(f" {address}"):
+            phrase = phrase[: -len(address) - 1].strip()
+
+    return phrase in EXIT_COMMANDS
 
 
 class Jarvis:
@@ -267,7 +312,7 @@ class Jarvis:
                     continue
                 
                 # Check for exit commands
-                if any(cmd in lower_text for cmd in ["exit", "quit", "goodbye", "stop", "au revoir", "arrête"]):
+                if is_exit_command(user_text):
                     logger.info("Exit command detected")
                     response_text = "Goodbye!" if self.stt.language == "en" else "Au revoir!"
                     
@@ -327,7 +372,7 @@ class Jarvis:
                     if not user_text:
                         continue
                     
-                    if user_text.lower() in ["exit", "quit", "goodbye"]:
+                    if is_exit_command(user_text):
                         print("Jarvis: Goodbye!")
                         break
                     
