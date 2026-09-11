@@ -25,10 +25,26 @@ fonctionnel qui lit `~/.ssh/id_rsa` sans rien demander.
 
 ---
 
-## Phase 0 — Rendre le produit fonctionnel (≈ 1 journée)
+## Phase 0 — Rendre le produit fonctionnel ✅ livrée
 
 Prérequis absolu de tout le reste. Détail des correctifs dans
 [`AUDIT.md`](AUDIT.md).
+
+Les 13 marqueurs `xfail` de cette phase ont été retirés : 379 tests passants,
+24 `xfail` restants, 96 % de couverture. Vérifié aussi par un run réel du
+point d'entrée `main.py --text`, qui produit l'historique au format protocole
+`[system, user, assistant(tool_calls), tool]` et crée le fichier demandé.
+
+En plus des 5 tâches prévues, la refactorisation de l'historique a rendu
+gratuits BUG-07 (`max_history=0`) et BUG-11 (prompt système dupliqué), tous
+deux planifiés en Phase 2 — ils sont faits.
+
+**Écart assumé par rapport au plan initial** : 0.1 devait se contenter de
+passer `CHUNK_SIZE` à 320 avec une validation au démarrage. La taille de
+trame du VAD a plutôt été découplée de la taille de bloc de capture, si bien
+que la détection de silence fonctionne à n'importe quel `CHUNK_SIZE`.
+`CHUNK_SIZE` est une option documentée et exposée à l'utilisateur : la valeur
+avec laquelle le projet était livré serait sinon devenue une erreur fatale.
 
 | Tâche | Bugs | Charge |
 |---|---|---|
