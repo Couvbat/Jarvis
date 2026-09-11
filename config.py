@@ -40,7 +40,15 @@ class Settings(BaseSettings):
     
     # System settings
     max_conversation_history: int = 10
-    allowed_directories: str = "/home,/tmp"
+    # Deliberately narrow. "/home" would put ~/.ssh, ~/.aws and every dotfile
+    # in a household inside the sandbox; widen it knowingly, not by default.
+    allowed_directories: str = "~/Documents,~/Downloads,/tmp"
+    # Glob patterns refused even inside an allowed directory, matched against
+    # each path component below the allowed root.
+    denied_patterns: str = (
+        ".ssh,.aws,.gnupg,.kube,.docker,.env,.env.*,*_history,"
+        "*.pem,*.key,id_rsa*,credentials,.netrc,.npmrc,.pypirc"
+    )
     command_whitelist: str = "ls,cat,mkdir,touch,rm,echo,code,firefox,nautilus"
     
     # Logging
@@ -50,6 +58,11 @@ class Settings(BaseSettings):
     def allowed_dirs_list(self) -> List[Path]:
         """Parse allowed directories into Path objects."""
         return [Path(d.strip()) for d in self.allowed_directories.split(',')]
+    
+    @property
+    def denied_patterns_list(self) -> List[str]:
+        """Parse denied path patterns into a list."""
+        return [p.strip() for p in self.denied_patterns.split(',') if p.strip()]
     
     @property
     def command_whitelist_list(self) -> List[str]:
