@@ -49,7 +49,17 @@ class Settings(BaseSettings):
         ".ssh,.aws,.gnupg,.kube,.docker,.env,.env.*,*_history,"
         "*.pem,*.key,id_rsa*,credentials,.netrc,.npmrc,.pypirc"
     )
-    command_whitelist: str = "ls,cat,mkdir,touch,rm,echo,code,firefox,nautilus"
+    # Launchers only by default. A whitelisted CLI tool such as rm, cat or
+    # mkdir reaches the whole disk: it never passes through the path sandbox.
+    # File operations belong to the sandboxed fs__ tools.
+    command_whitelist: str = "code,firefox,nautilus,gedit,xdg-open"
+    # Commands launched detached, without waiting for them or reading output.
+    gui_applications: str = "code,firefox,nautilus,gedit,xdg-open"
+    
+    # Web access
+    allow_private_network_fetch: bool = False
+    max_fetch_bytes: int = 2_000_000
+    fetch_timeout: int = 10
     
     # Logging
     log_level: str = "INFO"
@@ -58,6 +68,11 @@ class Settings(BaseSettings):
     def allowed_dirs_list(self) -> List[Path]:
         """Parse allowed directories into Path objects."""
         return [Path(d.strip()) for d in self.allowed_directories.split(',')]
+    
+    @property
+    def gui_applications_list(self) -> List[str]:
+        """Parse GUI application list."""
+        return [g.strip() for g in self.gui_applications.split(',') if g.strip()]
     
     @property
     def denied_patterns_list(self) -> List[str]:
