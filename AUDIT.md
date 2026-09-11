@@ -8,11 +8,13 @@ et la documentation. Chaque anomalie porte un identifiant `BUG-xx` repris
 verbatim dans la suite de tests (`tests/`), sous forme de test `xfail(strict)`
 qui passera au vert le jour où le correctif est appliqué.
 
-> **Statut au 11 septembre 2026 — Phase 0 du plan livrée.**
-> Corrigés et vérifiés par tests : BUG-07, BUG-08, BUG-09, BUG-11, BUG-15, BUG-16, BUG-17, BUG-18, BUG-19, BUG-21, BUG-22, BUG-26, BUG-27.
-> Les trois anomalies bloquantes de la §2 ne le sont plus ; les failles de
-> sécurité de la §3 sont désormais **atteignables** et constituent la Phase 1.
-> Suite de tests : 379 passants, 24 `xfail`, 96 % de couverture.
+> **Statut au 11 septembre 2026 — Phases 0 et 1 du plan livrées.**
+> Corrigés et vérifiés par tests : BUG-01 à BUG-09, BUG-11, BUG-15 à BUG-19,
+> BUG-21, BUG-22, BUG-26, BUG-27. Restent 14 anomalies, toutes en Phase 2+ :
+> BUG-10, 12, 13, 14, 20, 23, 24, 25, 28, 29, 30, 31, 32, 33.
+> Les trois anomalies bloquantes de la §2 et les quatre failles de la §3 sont
+> closes. `action_executor.py` et `whitelist_manager.py` n'existent plus.
+> Suite de tests : 604 passants, 14 `xfail`, 95 % de couverture.
 
 **Résumé** : le squelette est complet et cohérent — les 7 modules existent,
 s'assemblent proprement et la séparation des responsabilités est correcte.

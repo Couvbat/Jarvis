@@ -76,7 +76,29 @@ attendent :
 
 ---
 
-## Phase 1 — Registre d'outils, CRUD complet, moteur de politique (≈ 4 jours)
+## Phase 1 — Registre d'outils, CRUD complet, moteur de politique ✅ livrée
+
+Les 10 marqueurs `xfail` de cette phase ont été retirés : 604 tests passants,
+14 `xfail` restants, 95 % de couverture. `action_executor.py` et
+`whitelist_manager.py` sont supprimés.
+
+**Trouvé par le run réel, pas par les tests unitaires** : le moteur demandait
+confirmation *avant* toute vérification du sandbox, donc lire `/etc/passwd`
+interrogeait l'utilisateur pour n'être refusé qu'ensuite. `ToolSpec.precheck`
+corrige l'ordre — une invite dépense l'attention de l'utilisateur, et la
+dépenser sur une action impossible lui apprend à valider sans lire.
+
+**Durcissements non prévus au plan, décidés en cours de route** :
+
+- `ALLOWED_DIRECTORIES` passe de `/home,/tmp` à `~/Documents,~/Downloads,/tmp`.
+- `COMMAND_WHITELIST` perd `ls`, `cat`, `mkdir`, `touch` et `rm` : un outil CLI
+  whitelisté atteint tout le disque, car il ne passe jamais par le sandbox de
+  chemins. `rm` dans la whitelist par défaut contournait entièrement la
+  protection des fichiers.
+
+---
+
+## Phase 1 — détail (livrée)
 
 C'est la phase qui prépare MCP. Elle démonte `action_executor.py` en trois
 responsabilités séparées, et elle traite la sécurité **dans** cette
