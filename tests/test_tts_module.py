@@ -1,5 +1,6 @@
 """Tests for text-to-speech (tts_module.py)."""
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -84,7 +85,7 @@ class TestBinaryDiscovery:
 
         monkeypatch.setattr(tts_module.subprocess, "run", fake_run)
         TTSModule()
-        assert len(probed) == 4  # every candidate was tried
+        assert len(probed) == 5  # every candidate was tried
 
 
 class TestModelDiscovery:
@@ -107,6 +108,38 @@ class TestModelDiscovery:
         monkeypatch.chdir(tmp_path)
         module.initialize()
         assert module.model_path is not None
+
+    def test_initialize_reads_the_sample_rate_from_the_voice_config(
+        self, module, tmp_path, monkeypatch
+    ):
+        """Piper ships an ``.onnx.json`` next to each voice; it names the rate."""
+        monkeypatch.chdir(tmp_path)
+        models = tmp_path / "piper" / "models"
+        models.mkdir(parents=True)
+        (models / "en_US-lessac-medium.onnx").write_bytes(b"fake")
+        (models / "en_US-lessac-medium.onnx.json").write_text(
+            json.dumps({"audio": {"sample_rate": 16000}})
+        )
+        module.initialize()
+        assert module.sample_rate == 16000
+
+    def test_a_missing_voice_config_falls_back_to_the_default_rate(
+        self, module, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        module.initialize()
+        assert module.sample_rate == tts_module.DEFAULT_SAMPLE_RATE
+
+    def test_a_corrupt_voice_config_falls_back_to_the_default_rate(
+        self, module, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        models = tmp_path / "piper" / "models"
+        models.mkdir(parents=True)
+        (models / "en_US-lessac-medium.onnx").write_bytes(b"fake")
+        (models / "en_US-lessac-medium.onnx.json").write_text("{not json")
+        module.initialize()
+        assert module.sample_rate == tts_module.DEFAULT_SAMPLE_RATE
 
     def test_initialize_survives_a_missing_binary(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
@@ -138,16 +171,32 @@ class TestSynthesize:
         return module
 
     def test_empty_text_returns_empty_audio_without_calling_piper(self, synth):
-        assert synth.synthesize("").size == 0
+        audio, _ = synth.synthesize("")
+        assert audio.size == 0
         assert "cmd" not in synth._captured
 
+    def test_empty_text_still_reports_a_usable_sample_rate(self, synth):
+        _, sample_rate = synth.synthesize("")
+        assert sample_rate > 0
+
     def test_whitespace_only_text_returns_empty_audio(self, synth):
-        assert synth.synthesize("   ").size == 0
+        audio, _ = synth.synthesize("   ")
+        assert audio.size == 0
 
     def test_returns_int16_audio(self, synth):
-        audio = synth.synthesize("hello")
+        audio, _ = synth.synthesize("hello")
         assert audio.dtype == np.int16
         assert audio.size > 0
+
+    def test_reports_the_rate_of_the_synthesised_file(self, synth, monkeypatch):
+        def emit_16k(cmd, **kwargs):
+            write_wav(Path(cmd[cmd.index("--output_file") + 1]), sample_rate=16000)
+            return FakeCompleted(returncode=0)
+
+        monkeypatch.setattr(tts_module.subprocess, "run", emit_16k)
+        _, sample_rate = synth.synthesize("hello")
+        assert sample_rate == 16000
+        assert synth.sample_rate == 16000
 
     def test_passes_the_model_path(self, synth):
         synth.synthesize("hello")
@@ -220,20 +269,12 @@ class TestSynthesizeToFile:
             module.synthesize_to_file("hello", str(tmp_path / "out.wav"))
 
 
-# --------------------------------------------------------------------------- #
-# Known gaps
-# --------------------------------------------------------------------------- #
-
-@pytest.mark.xfail(
-    strict=True, reason="BUG-15: a local piper install makes TTSModule() raise"
-)
 def test_local_piper_directory_does_not_break_construction(tmp_path, monkeypatch):
     """``setup_piper.py`` extracts the binary to ``piper/piper/piper``.
 
-    The probe list contains ``./piper/piper``, which is then a *directory*.
-    Executing it raises ``PermissionError``, which the probe does not catch,
-    so constructing ``TTSModule`` crashes on exactly the layout the project's
-    own installer produces.
+    ``./piper/piper`` is then a *directory*, and executing it raises
+    ``PermissionError`` - which used to escape the probe and crash
+    construction on exactly the layout the project's own installer produces.
     """
     monkeypatch.chdir(tmp_path)
     (tmp_path / "piper" / "piper").mkdir(parents=True)
@@ -250,13 +291,9 @@ def test_local_piper_directory_does_not_break_construction(tmp_path, monkeypatch
     TTSModule()
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-16: synthesize() drops the sample rate")
 def test_synthesize_reports_its_sample_rate(tmp_path, monkeypatch, piper_probe):
-    """``sf.read`` returns the real rate and ``synthesize`` throws it away.
-
-    Callers hardcode 22050 Hz.  A ``*-low`` voice is 16 kHz, so it plays back
-    ~37% too fast.
-    """
+    """A ``*-low`` voice is 16 kHz; played at an assumed 22050 it would run
+    ~37% too fast."""
     monkeypatch.chdir(tmp_path)
     module = TTSModule()
     module.initialize()
@@ -270,10 +307,8 @@ def test_synthesize_reports_its_sample_rate(tmp_path, monkeypatch, piper_probe):
     assert sample_rate == 16000
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-17: temp files leak when piper fails")
 def test_temp_files_are_cleaned_up_when_piper_fails(tmp_path, monkeypatch, piper_probe):
-    """The unlink calls sit after the return-code check, so a failed
-    synthesis leaves both the .txt and the .wav behind."""
+    """A failed synthesis must not leave its .txt and .wav behind."""
     import tempfile
 
     monkeypatch.chdir(tmp_path)

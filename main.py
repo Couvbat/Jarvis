@@ -79,6 +79,21 @@ class Jarvis:
                 else:
                     print("Invalid choice. Please enter y, a, or n.")
     
+    def _speak(self, text: str):
+        """Say something out loud, falling back to the terminal if TTS fails."""
+        try:
+            audio, sample_rate = self.tts.synthesize(text)
+            if len(audio) > 0:
+                # The rate comes from the synthesiser: Piper's *-medium voices
+                # are 22050 Hz but *-low voices are 16000 Hz, and assuming one
+                # of them plays the other at the wrong speed.
+                self.audio.play_audio(audio, sample_rate)
+                return
+        except Exception as e:
+            logger.error(f"TTS error: {e}")
+
+        print(f"Jarvis: {text}")
+
     def process_user_input(self, user_text: str) -> str:
         """
         Process user input through the LLM, executing tools until it stops
@@ -228,12 +243,7 @@ class Jarvis:
                         self.tui.add_system_message("Language changed to French")
                         self.tui.update_status("Speaking...")
                     
-                    try:
-                        audio_response = self.tts.synthesize(response_text)
-                        self.audio.play_audio(audio_response, 22050)
-                    except Exception as e:
-                        logger.error(f"TTS error: {e}")
-                        print(f"Jarvis: {response_text}")
+                    self._speak(response_text)
                     
                     if self.use_tui:
                         self.tui.update_status("Ready")
@@ -250,12 +260,7 @@ class Jarvis:
                         self.tui.add_system_message("Language changed to English")
                         self.tui.update_status("Speaking...")
                     
-                    try:
-                        audio_response = self.tts.synthesize(response_text)
-                        self.audio.play_audio(audio_response, 22050)
-                    except Exception as e:
-                        logger.error(f"TTS error: {e}")
-                        print(f"Jarvis: {response_text}")
+                    self._speak(response_text)
                     
                     if self.use_tui:
                         self.tui.update_status("Ready")
@@ -271,12 +276,7 @@ class Jarvis:
                         self.tui.update_status("Shutting down...")
                     
                     # Speak goodbye
-                    try:
-                        audio_response = self.tts.synthesize(response_text)
-                        self.audio.play_audio(audio_response, 22050)
-                    except Exception as e:
-                        logger.error(f"TTS error: {e}")
-                        print(f"Jarvis: {response_text}")
+                    self._speak(response_text)
                     
                     break
                 
@@ -297,19 +297,7 @@ class Jarvis:
                     response_text = "I encountered an error processing your request."
                 
                 # Synthesize and speak response
-                try:
-                    audio_response = self.tts.synthesize(response_text)
-                    
-                    if len(audio_response) > 0:
-                        self.audio.play_audio(audio_response, 22050)
-                    else:
-                        # Fallback to text if TTS fails
-                        print(f"Jarvis: {response_text}")
-                        
-                except Exception as e:
-                    logger.error(f"TTS error: {e}")
-                    # Fallback to text output
-                    print(f"Jarvis: {response_text}")
+                self._speak(response_text)
                 
                 if self.use_tui:
                     self.tui.update_status("Ready")

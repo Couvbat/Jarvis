@@ -87,7 +87,7 @@ class FakeTTS:
 
     def synthesize(self, text):
         self.spoken.append(text)
-        return np.zeros(2205, dtype=np.int16)
+        return np.zeros(2205, dtype=np.int16), self.sample_rate
 
 
 @pytest.fixture
@@ -281,6 +281,17 @@ class TestVoiceLoop:
         monkeypatch.setattr(wiring["stt"], "transcribe", flaky)
         jarvis.run_interactive()
         assert wiring["tts"].spoken
+
+    def test_empty_synthesis_falls_back_to_text(self, jarvis, wiring, monkeypatch, capsys):
+        """Nothing to play means say it in the terminal, not stay silent."""
+        wiring["stt"].script = ["bonjour", "exit"]
+        wiring["llm"].script = [{"response": "Salut", "tool_calls": None}]
+        monkeypatch.setattr(
+            wiring["tts"], "synthesize",
+            lambda text: (np.array([], dtype=np.int16), 16000),
+        )
+        jarvis.run_interactive()
+        assert "Salut" in capsys.readouterr().out
 
     def test_tts_failure_falls_back_to_text(self, jarvis, wiring, monkeypatch, capsys):
         wiring["stt"].script = ["bonjour", "exit"]
@@ -564,12 +575,9 @@ def test_unknown_flag_is_reported(wiring, monkeypatch, capsys):
 
 
 
-@pytest.mark.xfail(
-    strict=True, reason="BUG-27: TTS output is played at a hardcoded 22050 Hz"
-)
 def test_playback_uses_the_synthesiser_sample_rate(wiring):
-    """``main.py`` calls ``play_audio(audio, 22050)`` everywhere.  A ``*-low``
-    Piper voice outputs 16 kHz and plays back chipmunked."""
+    """A ``*-low`` Piper voice outputs 16 kHz; played at an assumed 22050 it
+    would come out chipmunked."""
     wiring["stt"].script = ["bonjour", "exit"]
     wiring["llm"].script = [{"response": "Salut", "tool_calls": None}]
     Jarvis(use_tui=False).run_interactive()
