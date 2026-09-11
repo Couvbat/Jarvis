@@ -83,9 +83,8 @@ class TestFileCreationFlow:
                 "execute_file_operation",
                 {"operation": "create_file", "path": str(target),
                  "content": "ma liste"},
-                as_model=False,
-            )], as_model=False),
-            make_chat_response("C'est fait.", as_model=False),
+            )]),
+            make_chat_response("C'est fait."),
         ])
         wired._stt.script = ["crée un fichier notes.txt", "exit"]
         wired.run_interactive()
@@ -99,9 +98,8 @@ class TestFileCreationFlow:
             make_chat_response("ok", [make_tool_call(
                 "execute_file_operation",
                 {"operation": "create_file", "path": str(target), "content": "x"},
-                as_model=False,
-            )], as_model=False),
-            make_chat_response("done", as_model=False),
+            )]),
+            make_chat_response("done"),
         ])
         wired._stt.script = ["crée un fichier", "exit"]
         wired.run_interactive()
@@ -114,9 +112,8 @@ class TestFileCreationFlow:
             make_chat_response("ok", [make_tool_call(
                 "execute_file_operation",
                 {"operation": "create_file", "path": str(target), "content": "x"},
-                as_model=False,
-            )], as_model=False),
-            make_chat_response("Annulé.", as_model=False),
+            )]),
+            make_chat_response("Annulé."),
         ])
         wired._stt.script = ["crée un fichier", "exit"]
         wired.run_interactive()
@@ -130,9 +127,8 @@ class TestFileCreationFlow:
             make_chat_response("ok", [make_tool_call(
                 "execute_file_operation",
                 {"operation": "create_file", "path": str(target), "content": "x"},
-                as_model=False,
-            )], as_model=False),
-            make_chat_response("Je ne peux pas.", as_model=False),
+            )]),
+            make_chat_response("Je ne peux pas."),
         ])
         wired._stt.script = ["écris dans /etc", "exit"]
         wired.run_interactive()
@@ -147,9 +143,8 @@ class TestToolResultFeedback:
             make_chat_response("ok", [make_tool_call(
                 "execute_file_operation",
                 {"operation": "read_file", "path": str(sandbox / "notes.txt")},
-                as_model=False,
-            )], as_model=False),
-            make_chat_response("Le fichier dit: le contenu du fichier", as_model=False),
+            )]),
+            make_chat_response("Le fichier dit: le contenu du fichier"),
         ])
         wired._stt.script = ["lis notes.txt", "exit"]
         wired.run_interactive()
@@ -184,13 +179,13 @@ class TestWhitelistPersistence:
 
 class TestLanguageFlow:
     def test_switching_language_persists_across_turns(self, wired, fake_ollama):
-        fake_ollama.responses.append(make_chat_response("Bonjour", as_model=False))
+        fake_ollama.responses.append(make_chat_response("Bonjour"))
         wired._stt.script = ["switch to french", "bonjour", "exit"]
         wired.run_interactive()
         assert wired._stt.language == "fr"
 
     def test_the_llm_never_sees_the_switch_command(self, wired, fake_ollama):
-        fake_ollama.responses.append(make_chat_response("Bonjour", as_model=False))
+        fake_ollama.responses.append(make_chat_response("Bonjour"))
         wired._stt.script = ["switch to french", "bonjour", "exit"]
         wired.run_interactive()
         user_turns = [
@@ -225,29 +220,17 @@ class TestSystemPromptContract:
         assert "application" in prompt and "launch_application" in names
 
 
-# --------------------------------------------------------------------------- #
-# Known gaps
-# --------------------------------------------------------------------------- #
-
-@pytest.mark.xfail(
-    strict=True, reason="BUG-08: modern ollama responses break the whole tool flow"
-)
-def test_file_creation_works_with_a_modern_ollama_client(wired, sandbox, fake_ollama):
-    """Same flow as ``TestFileCreationFlow``, but with the response shape the
-    current ollama client actually returns (pydantic models rather than dicts).
-
-    ``chat()`` tries to ``json.dumps`` the tool calls, raises inside its own
-    ``try``, and returns the generic error string - so no tool ever runs and
-    the file is never created.
-    """
-    target = sandbox / "notes.txt"
+def test_file_creation_works_with_a_legacy_dict_response(wired, sandbox, fake_ollama):
+    """Older ollama clients hand back plain dicts; both shapes must work."""
+    target = sandbox / "legacy.txt"
     fake_ollama.responses.extend([
         make_chat_response("", [make_tool_call(
             "execute_file_operation",
-            {"operation": "create_file", "path": str(target), "content": "ma liste"},
-        )]),
-        make_chat_response("C'est fait."),
+            {"operation": "create_file", "path": str(target), "content": "ok"},
+            as_model=False,
+        )], as_model=False),
+        make_chat_response("C'est fait.", as_model=False),
     ])
-    wired._stt.script = ["crée un fichier notes.txt", "exit"]
+    wired._stt.script = ["crée un fichier", "exit"]
     wired.run_interactive()
-    assert target.exists()
+    assert target.read_text() == "ok"

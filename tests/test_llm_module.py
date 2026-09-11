@@ -63,32 +63,63 @@ class TestConversationHistory:
         history.clear()
         assert history.get_messages() == []
 
-    def test_get_messages_returns_the_live_internal_list(self):
-        """Callers can mutate the history through the accessor.
-
-        Harmless today because every caller only reads it, but it means the
-        history has no ownership boundary.
-        """
+    def test_get_messages_returns_a_snapshot(self):
+        """The accessor must not hand out a handle on the internal list."""
         history = ConversationHistory()
         history.add_message("user", "hello")
         history.get_messages().append({"role": "user", "content": "injected"})
-        assert len(history.get_messages()) == 2
+        assert len(history.get_messages()) == 1
 
-    def test_clear_without_a_system_message_keeps_the_first_turn(self):
-        """``clear()`` assumes index 0 is the system prompt; it is not always."""
+    def test_clear_drops_every_turn_when_there_is_no_system_prompt(self):
         history = ConversationHistory()
         history.add_message("user", "first")
         history.add_message("user", "second")
         history.clear()
-        assert history.get_messages() == [{"role": "user", "content": "first"}]
+        assert history.get_messages() == []
 
-    @pytest.mark.xfail(strict=True, reason="BUG-07: max_history=0 disables truncation")
-    def test_zero_max_history_should_truncate(self):
-        """``messages[-0:]`` is ``messages[0:]`` - the whole list.
+    def test_system_prompt_is_never_counted_against_the_limit(self):
+        history = ConversationHistory(max_history=3)
+        history.add_message("system", "SYSTEM")
+        for index in range(10):
+            history.add_message("user", str(index))
+        messages = history.get_messages()
+        assert messages[0]["role"] == "system"
+        assert len(messages) == 4  # system + 3 turns
 
-        Setting MAX_CONVERSATION_HISTORY=0 therefore grows the context without
-        bound instead of keeping only the system prompt.
+    def test_setting_the_system_prompt_twice_replaces_it(self):
+        history = ConversationHistory()
+        history.add_message("system", "FIRST")
+        history.add_message("system", "SECOND")
+        messages = history.get_messages()
+        assert len(messages) == 1
+        assert messages[0]["content"] == "SECOND"
+
+    def test_trimming_does_not_orphan_a_tool_result(self):
+        """A tool result whose assistant turn was trimmed away is dropped too.
+
+        Left behind, it would be a result the model cannot attach to any call.
         """
+        history = ConversationHistory(max_history=2)
+        history.add_assistant("", [{"function": {"name": "fetch", "arguments": {}}}])
+        history.add_tool_result("fetch", "the content")
+        history.add_user("and then?")
+        assert [message["role"] for message in history.get_messages()] == ["user"]
+
+    def test_assistant_tool_calls_are_stored_structurally(self):
+        history = ConversationHistory()
+        history.add_assistant("", [{"function": {"name": "fetch", "arguments": {}}}])
+        assert history.get_messages()[-1] == {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"function": {"name": "fetch", "arguments": {}}}],
+        }
+
+    def test_an_assistant_turn_without_tool_calls_omits_the_key(self):
+        history = ConversationHistory()
+        history.add_assistant("just prose")
+        assert "tool_calls" not in history.get_messages()[-1]
+
+    def test_zero_max_history_keeps_only_the_system_prompt(self):
         history = ConversationHistory(max_history=0)
         history.add_message("system", "SYSTEM")
         for index in range(20):
@@ -160,11 +191,16 @@ class TestChat:
         assert messages[-2] == {"role": "user", "content": "salut"}
         assert messages[-1] == {"role": "assistant", "content": "Bonjour"}
 
-    def test_returns_tool_calls(self, fake_ollama):
+    def test_returns_tool_calls_as_plain_data(self, fake_ollama):
         call = make_tool_call("fetch_web_page", {"url": "https://example.com"})
         fake_ollama.responses.append(make_chat_response("on it", [call]))
         result = LLMModule().chat("read example.com")
-        assert result["tool_calls"] == [call]
+        assert result["tool_calls"] == [{
+            "function": {
+                "name": "fetch_web_page",
+                "arguments": {"url": "https://example.com"},
+            }
+        }]
 
     def test_transport_error_is_converted_to_a_message(self, fake_ollama):
         fake_ollama.error = ConnectionError("ollama is down")
@@ -188,14 +224,64 @@ class TestChat:
         assert LLMModule().chat("hello")["tool_calls"] is None
 
 
+class TestContinueAfterTools:
+    def test_appends_no_message_of_its_own(self, fake_ollama):
+        """The tool results are the new information; a synthetic user turn
+        would pollute the conversation and pin the reply to its language."""
+        fake_ollama.responses.extend([
+            make_chat_response("hi"), make_chat_response("done"),
+        ])
+        module = LLMModule()
+        module.chat("bonjour")
+        module.add_tool_result("fetch_web_page", "content")
+
+        before = len(module.history.get_messages())
+        module.continue_after_tools()
+        after = module.history.get_messages()
+
+        assert len(after) == before + 1          # only the assistant reply
+        assert after[-1]["role"] == "assistant"
+        assert all(message["role"] != "user" for message in after[before:])
+
+    def test_sends_the_tool_result_to_the_model(self, fake_ollama):
+        fake_ollama.responses.extend([
+            make_chat_response("hi"), make_chat_response("done"),
+        ])
+        module = LLMModule()
+        module.chat("bonjour")
+        module.add_tool_result("fetch_web_page", "the page said hello")
+        module.continue_after_tools()
+
+        sent = fake_ollama.calls[-1]["messages"]
+        assert any(message["role"] == "tool"
+                   and message["content"] == "the page said hello"
+                   for message in sent)
+
+    def test_can_itself_ask_for_more_tools(self, fake_ollama):
+        """A follow-up turn is a normal turn: it may return tool calls too."""
+        call = make_tool_call("fetch_web_page", {"url": "https://example.com"})
+        fake_ollama.responses.extend([
+            make_chat_response("hi"), make_chat_response("", [call]),
+        ])
+        module = LLMModule()
+        module.chat("bonjour")
+        assert module.continue_after_tools()["tool_calls"] is not None
+
+    def test_a_transport_error_is_converted_to_a_message(self, fake_ollama):
+        module = LLMModule()
+        fake_ollama.error = ConnectionError("ollama is down")
+        assert "error" in module.continue_after_tools()["response"].lower()
+
+
 class TestToolResults:
-    def test_tool_result_is_appended(self, fake_ollama):
+    def test_tool_result_is_appended_in_protocol_shape(self, fake_ollama):
         module = LLMModule()
         module.add_tool_result("fetch_web_page", "some content")
-        last = module.history.get_messages()[-1]
-        assert last["role"] == "tool"
-        assert "fetch_web_page" in last["content"]
-        assert "some content" in last["content"]
+        assert module.history.get_messages()[-1] == {
+            "role": "tool",
+            "content": "some content",
+            "name": "fetch_web_page",
+        }
 
     def test_reset_drops_the_conversation(self, fake_ollama):
         fake_ollama.responses.append(make_chat_response("hi"))
@@ -209,25 +295,23 @@ class TestToolResults:
 # Known gaps
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.xfail(
-    strict=True, reason="BUG-08: tool calls from a modern ollama client break chat()"
-)
 def test_tool_call_without_content_survives_history_recording(fake_ollama):
-    """``json.dumps(tool_calls)`` cannot serialise the client's pydantic models.
+    """A tool call with no prose is the normal case, and must not break chat().
 
-    When the model answers with tool calls and no prose - the normal case -
-    ``chat()`` raises inside its own try block and degrades to the generic
-    error string, so the tools are never executed.
+    The client returns pydantic models, which are not JSON-serialisable; the
+    history normalises them to plain data instead.
     """
     call = make_tool_call("fetch_web_page", {"url": "https://example.com"})
     fake_ollama.responses.append(make_chat_response("", [call]))
     result = LLMModule().chat("read example.com")
-    assert result["tool_calls"] == [call]
+    assert result["tool_calls"] == [{
+        "function": {
+            "name": "fetch_web_page",
+            "arguments": {"url": "https://example.com"},
+        }
+    }]
 
 
-@pytest.mark.xfail(
-    strict=True, reason="BUG-09: assistant tool calls are stored as prose, not structure"
-)
 def test_tool_calls_are_replayed_in_the_protocol_shape(fake_ollama):
     """Ollama expects ``{"role": "assistant", "tool_calls": [...]}`` followed by
     ``{"role": "tool", "content": ...}``.  Jarvis flattens both into strings, so
@@ -244,12 +328,7 @@ def test_tool_calls_are_replayed_in_the_protocol_shape(fake_ollama):
     assert any(m.get("tool_calls") for m in replayed)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="BUG-11: reset_conversation duplicates the system prompt"
-)
 def test_reset_conversation_keeps_exactly_one_system_prompt(fake_ollama):
-    """``clear()`` already keeps message 0 (the system prompt) and
-    ``reset_conversation`` then appends another one.  Each reset adds a copy."""
     fake_ollama.responses.append(make_chat_response("hi"))
     module = LLMModule()
     module.chat("hello")

@@ -39,16 +39,26 @@ class FakeSTT:
 
 
 class FakeLLM:
+    MAX_TOOL_ITERATIONS = 5
+
     def __init__(self, script=None):
         self.script = list(script or [])
-        self.chats = []
+        self.chats = []          # user messages passed to chat()
+        self.follow_ups = 0      # continue_after_tools() calls
         self.tool_results = []
 
-    def chat(self, message):
-        self.chats.append(message)
+    def _next(self):
         if self.script:
             return self.script.pop(0)
         return {"response": "ok", "tool_calls": None}
+
+    def chat(self, message):
+        self.chats.append(message)
+        return self._next()
+
+    def continue_after_tools(self):
+        self.follow_ups += 1
+        return self._next()
 
     def add_tool_result(self, name, result):
         self.tool_results.append((name, result))
@@ -160,6 +170,37 @@ class TestProcessUserInput:
         ]
         jarvis.process_user_input("lis le site")
         assert wiring["llm"].tool_results == [("fetch_web_page", "tool ok")]
+
+    def test_a_second_round_of_tool_calls_also_runs(self, jarvis, wiring):
+        """The follow-up turn may ask for more tools; they must be executed."""
+        first = {"function": {"name": "execute_file_operation", "arguments": {}}}
+        second = {"function": {"name": "fetch_web_page", "arguments": {}}}
+        wiring["llm"].script = [
+            {"response": "", "tool_calls": [first]},
+            {"response": "", "tool_calls": [second]},
+            {"response": "fini", "tool_calls": None},
+        ]
+        assert jarvis.process_user_input("fais les deux") == "fini"
+        assert jarvis.executor.executed == [first, second]
+
+    def test_the_tool_loop_is_bounded(self, jarvis, wiring):
+        """A model that keeps asking for tools must not loop forever."""
+        call = {"function": {"name": "fetch_web_page", "arguments": {}}}
+        wiring["llm"].script = [
+            {"response": "", "tool_calls": [call]} for _ in range(50)
+        ]
+        jarvis.process_user_input("boucle")
+        assert len(jarvis.executor.executed) == FakeLLM.MAX_TOOL_ITERATIONS
+
+    def test_the_follow_up_is_not_a_user_turn(self, jarvis, wiring):
+        call = {"function": {"name": "fetch_web_page", "arguments": {}}}
+        wiring["llm"].script = [
+            {"response": "", "tool_calls": [call]},
+            {"response": "done", "tool_calls": None},
+        ]
+        jarvis.process_user_input("lis le site")
+        assert wiring["llm"].chats == ["lis le site"]
+        assert wiring["llm"].follow_ups == 1
 
     def test_several_tool_calls_all_run(self, jarvis, wiring):
         calls = [
@@ -521,27 +562,6 @@ def test_unknown_flag_is_reported(wiring, monkeypatch, capsys):
     with pytest.raises(SystemExit):
         main_module.main()
 
-
-@pytest.mark.xfail(
-    strict=True, reason="BUG-26: the follow-up turn is injected as a fake user message"
-)
-def test_follow_up_after_tools_is_not_a_user_turn(wiring):
-    """After running tools Jarvis sends the literal sentence 'Please provide a
-    natural response based on the tool results.' as a *user* message.
-
-    It lands in the history, it is always English regardless of the
-    conversation language, and any tool calls the follow-up returns are
-    dropped on the floor.
-    """
-    call = {"function": {"name": "fetch_web_page", "arguments": {}}}
-    wiring["llm"].script = [
-        {"response": "", "tool_calls": [call]},
-        {"response": "done", "tool_calls": None},
-    ]
-    instance = Jarvis(use_tui=False)
-    instance.process_user_input("lis le site")
-    assert not any("Please provide a natural response" in chat
-                   for chat in wiring["llm"].chats)
 
 
 @pytest.mark.xfail(

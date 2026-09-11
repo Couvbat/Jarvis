@@ -81,67 +81,73 @@ class Jarvis:
     
     def process_user_input(self, user_text: str) -> str:
         """
-        Process user input through LLM and execute any tools.
-        
+        Process user input through the LLM, executing tools until it stops
+        asking for them.
+
         Args:
             user_text: User's transcribed text
-            
+
         Returns:
             Final response text
         """
-        # Get LLM response
         if self.use_tui:
             self.tui.update_status("Thinking...")
-        
+
         result = self.llm.chat(user_text)
-        response_text = result["response"]
-        tool_calls = result["tool_calls"]
-        
-        # Execute any tool calls
-        if tool_calls:
+
+        for _ in range(self.llm.MAX_TOOL_ITERATIONS):
+            tool_calls = result["tool_calls"]
+            if not tool_calls:
+                break
+
             logger.info(f"Executing {len(tool_calls)} tool call(s)")
-            
             if self.use_tui:
                 self.tui.update_status(f"Executing {len(tool_calls)} action(s)...")
-            
-            tool_results = []
+
             for tool_call in tool_calls:
-                # Log action to TUI
-                function_name = tool_call.get("function", {}).get("name", "unknown")
-                arguments = tool_call.get("function", {}).get("arguments", {})
-                
-                # Format action details for TUI
-                action_details = str(arguments)
-                if len(action_details) > 100:
-                    action_details = action_details[:100] + "..."
-                
-                if self.use_tui:
-                    self.tui.add_action(function_name, action_details, "info")
-                
-                # Execute tool
-                tool_result = self.executor.execute_tool_call(tool_call)
-                tool_results.append(tool_result)
-                
-                # Update action status
-                if self.use_tui:
-                    status = "success" if "Error" not in tool_result and "cancelled" not in tool_result else "error"
-                    self.tui.add_action(function_name, tool_result[:80], status)
-                
-                # Add result to conversation
-                self.llm.add_tool_result(function_name, tool_result)
-            
-            # Get final response from LLM after tool execution
+                self._execute_tool_call(tool_call)
+
             if self.use_tui:
                 self.tui.update_status("Generating response...")
-            
-            follow_up = self.llm.chat("Please provide a natural response based on the tool results.")
-            response_text = follow_up["response"]
-        
+
+            # No synthetic user turn here: the tool results are the new
+            # information, and the follow-up may legitimately ask for more
+            # tools, which is why this is a loop rather than one extra call.
+            result = self.llm.continue_after_tools()
+        else:
+            if result["tool_calls"]:
+                logger.warning(
+                    f"Stopped after {self.llm.MAX_TOOL_ITERATIONS} tool rounds"
+                )
+
         if self.use_tui:
             self.tui.update_status("Speaking...")
-        
-        return response_text
-    
+
+        return result["response"]
+
+    def _execute_tool_call(self, tool_call: dict) -> str:
+        """Execute one tool call and record it in the conversation and the UI."""
+        function = tool_call.get("function", {})
+        function_name = function.get("name", "unknown")
+        arguments = function.get("arguments", {})
+
+        if self.use_tui:
+            action_details = str(arguments)
+            if len(action_details) > 100:
+                action_details = action_details[:100] + "..."
+            self.tui.add_action(function_name, action_details, "info")
+
+        tool_result = self.executor.execute_tool_call(tool_call)
+
+        if self.use_tui:
+            failed = "Error" in tool_result or "cancelled" in tool_result
+            self.tui.add_action(
+                function_name, tool_result[:80], "error" if failed else "success"
+            )
+
+        self.llm.add_tool_result(function_name, tool_result)
+        return tool_result
+
     def run_interactive(self):
         """Run in interactive voice mode."""
         if not self.use_tui:
