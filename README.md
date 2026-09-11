@@ -36,7 +36,8 @@ Audio Input → STT (Whisper) → LLM (Ollama) → Action Executor → TTS (Pipe
 ### 1. Clone the Repository
 
 ```bash
-cd /home/jules/Dev/other/Jarvis
+git clone <repository-url> Jarvis
+cd Jarvis
 ```
 
 ### 2. Install System Dependencies
@@ -219,8 +220,13 @@ Jarvis/
 ├── llm_module.py          # LLM integration (Ollama)
 ├── action_executor.py     # System operations executor
 ├── tts_module.py          # Text-to-speech (Piper)
+├── tui.py                 # Rich terminal interface
+├── whitelist_manager.py   # Persistent approval store
 ├── setup_piper.py         # Piper installation script
+├── tests/                 # Test suite (see tests/README.md)
 ├── requirements.txt       # Python dependencies
+├── requirements-dev.txt   # Development dependencies
+├── requirements-test.txt  # Test-only dependencies (no native deps)
 ├── .env.example          # Example configuration
 ├── .env                  # Your configuration (create this)
 └── piper/                # Piper binary and models (created by setup)
@@ -380,6 +386,30 @@ def your_tool_name(self, param1: str) -> str:
     # ... your code ...
     return "Result"
 ```
+
+## Development
+
+### Running the tests
+
+```bash
+pip install -r requirements-test.txt   # no PortAudio, no models, no Ollama needed
+pytest
+pytest --cov --cov-report=term-missing
+ruff check .
+```
+
+The suite stubs every native and network dependency (`sounddevice`,
+`webrtcvad`, `faster-whisper`, `ollama`), so it runs on a bare machine in
+about a second. See [tests/README.md](tests/README.md).
+
+### Project status
+
+- [AUDIT.md](AUDIT.md) — what is implemented, what is not, and the known bugs
+- [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — the plan to close the gaps
+- [FEATURES_IDEA.md](FEATURES_IDEA.md) — longer-term feature ideas
+
+Known bugs are each pinned by an `xfail(strict=True)` test carrying their
+`BUG-xx` identifier. Run `pytest -rx` to list them.
 
 ## Contributing
 
