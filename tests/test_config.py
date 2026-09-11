@@ -15,7 +15,7 @@ class TestDefaults:
         fresh = Settings(_env_file=None)
         assert fresh.sample_rate == 16000
         assert fresh.channels == 1
-        assert fresh.chunk_size == 1024
+        assert fresh.chunk_size == 320
         assert fresh.whisper_model == "base"
         assert fresh.ollama_model == "llama3.1:8b"
         assert fresh.max_conversation_history == 10

@@ -17,7 +17,10 @@ class Settings(BaseSettings):
     # Audio settings
     sample_rate: int = 16000
     channels: int = 1
-    chunk_size: int = 1024
+    # 20 ms at 16 kHz. Silence is only re-checked once per captured block, so
+    # smaller blocks make end-of-speech detection more responsive. The VAD
+    # itself carves its own frames, so any value works.
+    chunk_size: int = 320
     
     # STT settings
     whisper_model: str = "base"

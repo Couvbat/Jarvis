@@ -58,15 +58,19 @@ class TestRecording:
         audio = handler.record_until_silence(max_duration=0.2)
         assert int(audio.flat[0]) == 1234
 
-    def test_recording_keeps_the_channel_axis(self, handler, fake_sd):
-        """Blocks come back as ``(frames, channels)`` and are concatenated as-is.
-
-        The result is therefore 2-D even for mono capture - see the xfail on
-        mono flattening at the bottom of this file.
-        """
+    def test_recording_returns_a_flat_mono_waveform(self, handler, fake_sd):
+        """faster-whisper's feature extractor wants a 1-D mono waveform."""
         audio = handler.record_until_silence(max_duration=0.2)
-        assert audio.ndim == 2
-        assert audio.shape[1] == 1
+        assert audio.ndim == 1
+
+    def test_multichannel_capture_is_downmixed(self, settings, fake_sd):
+        settings.channels = 2
+        audio = AudioHandler().record_until_silence(max_duration=0.2)
+        assert audio.ndim == 1
+
+    def test_downmix_averages_channels_without_overflowing(self):
+        loud = np.full((4, 2), 32767, dtype=np.int16)
+        assert AudioHandler._to_mono(loud).tolist() == [32767] * 4
 
     def test_stream_errors_propagate(self, handler, fake_sd, monkeypatch):
         class ExplodingStream:
@@ -83,49 +87,97 @@ class TestRecording:
 
 
 class TestVoiceActivityDetection:
-    """With a VAD-legal chunk size the silence logic behaves as designed."""
+    """The VAD carves its own 20 ms frames, whatever the capture block size."""
 
-    @pytest.fixture
-    def vad_sized_handler(self, settings):
-        settings.chunk_size = 320  # 20 ms at 16 kHz - accepted by webrtcvad
-        return AudioHandler()
+    @staticmethod
+    def record(handler, **kwargs):
+        """Record and report what the caller can actually observe."""
+        audio = handler.record_until_silence(**kwargs)
+        return {
+            "blocks": FakeInputStream.instances[-1].read_calls,
+            "seconds": len(audio) / handler.sample_rate,
+        }
 
-    def test_silence_stops_the_recording_early(self, vad_sized_handler, fake_sd, fake_vad):
-        FakeVad.speech_decider = staticmethod(lambda buf: False)
-        audio = vad_sized_handler.record_until_silence(
-            silence_threshold=0.2, max_duration=30.0
-        )
-        reads = FakeInputStream.instances[0].read_calls
-        assert reads < int(30.0 * 16000 / 320)
-        assert reads == 11  # 10 silent frames + the >10 frame guard
-        assert len(audio) == 11 * 320
+    def test_frame_size_is_derived_from_the_sample_rate(self, handler):
+        assert handler.vad_frame_samples == 320  # 20 ms at 16 kHz
 
-    def test_continuous_speech_records_to_the_cap(
-        self, vad_sized_handler, fake_sd, fake_vad
+    @pytest.mark.parametrize("chunk_size", [160, 320, 480, 1024, 2048])
+    def test_silence_stops_the_recording_at_any_block_size(
+        self, settings, fake_sd, fake_vad, chunk_size
     ):
+        """The capture block size is independent of the VAD frame size.
+
+        1024 samples at 16 kHz is 64 ms - a frame webrtcvad rejects outright -
+        so this is the case that used to record for the full 30 s cap.
+        """
+        settings.chunk_size = chunk_size
+        FakeVad.speech_decider = staticmethod(lambda buf: False)
+        result = self.record(
+            AudioHandler(), silence_threshold=0.2, max_duration=30.0
+        )
+        assert result["seconds"] < 1.0
+
+    def test_continuous_speech_records_to_the_cap(self, handler, fake_sd, fake_vad):
         FakeVad.speech_decider = staticmethod(lambda buf: True)
-        vad_sized_handler.record_until_silence(silence_threshold=0.2, max_duration=0.5)
-        assert FakeInputStream.instances[0].read_calls == int(0.5 * 16000 / 320)
+        result = self.record(handler, silence_threshold=0.2, max_duration=0.5)
+        # The cap is enforced in whole blocks, so the last partial block is
+        # never started: expect the cap minus at most one block.
+        block_seconds = handler.chunk_size / handler.sample_rate
+        assert 0.5 - block_seconds < result["seconds"] <= 0.5
 
-    def test_speech_resets_the_silence_counter(
-        self, vad_sized_handler, fake_sd, fake_vad
-    ):
-        decisions = iter([False] * 8 + [True] + [False] * 100)
-        FakeVad.speech_decider = staticmethod(lambda buf: next(decisions))
-        vad_sized_handler.record_until_silence(
-            silence_threshold=0.2, max_duration=30.0
+    def test_speech_resets_the_silence_counter(self, settings, fake_sd, fake_vad):
+        """A blip of speech restarts the silence countdown from zero."""
+        settings.chunk_size = 320  # one VAD frame per block, easy to count
+        quiet = iter([False] * 200)
+        FakeVad.speech_decider = staticmethod(lambda buf: next(quiet))
+        uninterrupted = self.record(
+            AudioHandler(), silence_threshold=0.6, max_duration=30.0
         )
-        # 8 silent + 1 speech + 10 silent = 19 reads, not 11.
-        assert FakeInputStream.instances[0].read_calls == 19
 
-    def test_short_recordings_are_not_cut_by_the_frame_guard(
-        self, vad_sized_handler, fake_sd, fake_vad
+        # Same run, but frame 9 is speech: the countdown restarts there.
+        decisions = iter([False] * 8 + [True] + [False] * 200)
+        FakeVad.speech_decider = staticmethod(lambda buf: next(decisions))
+        interrupted = self.record(
+            AudioHandler(), silence_threshold=0.6, max_duration=30.0
+        )
+
+        assert interrupted["blocks"] == uninterrupted["blocks"] + 9
+
+    def test_silence_threshold_controls_how_long_we_wait(
+        self, handler, fake_sd, fake_vad
     ):
         FakeVad.speech_decider = staticmethod(lambda buf: False)
-        vad_sized_handler.record_until_silence(
-            silence_threshold=0.01, max_duration=30.0
+        patient = self.record(handler, silence_threshold=1.5, max_duration=30.0)
+        assert patient["seconds"] == pytest.approx(1.5, abs=0.1)
+
+    def test_min_duration_keeps_a_leading_pause_from_ending_the_recording(
+        self, handler, fake_sd, fake_vad
+    ):
+        """Someone who pauses before speaking must not get a truncated clip."""
+        FakeVad.speech_decider = staticmethod(lambda buf: False)
+        result = self.record(
+            handler, silence_threshold=0.02, max_duration=30.0, min_duration=1.0
         )
-        assert FakeInputStream.instances[0].read_calls == 11
+        assert result["seconds"] >= 1.0
+
+    def test_an_unsupported_sample_rate_disables_the_vad(self, settings, fake_sd):
+        settings.sample_rate = 44100  # not one of 8/16/32/48 kHz
+        instance = AudioHandler()
+        assert instance.vad_frame_samples is None
+        result = self.record(instance, silence_threshold=0.2, max_duration=0.2)
+        assert result["seconds"] == pytest.approx(0.2, abs=0.05)
+
+    def test_a_rejected_frame_disables_the_vad_instead_of_looping(
+        self, handler, fake_sd, fake_vad
+    ):
+        """If the VAD ever rejects a frame it is switched off, loudly, once."""
+        def explode(buf):
+            raise ValueError("Error while processing frame")
+
+        FakeVad.speech_decider = staticmethod(explode)
+        result = self.record(handler, silence_threshold=0.2, max_duration=0.3)
+        assert handler.vad_frame_samples is None
+        assert result["seconds"] == pytest.approx(0.3, abs=0.05)
 
 
 class TestPlayback:
@@ -182,45 +234,6 @@ class TestFileIO:
 # --------------------------------------------------------------------------- #
 # Known gaps
 # --------------------------------------------------------------------------- #
-
-@pytest.mark.xfail(
-    strict=True, reason="BUG-18: the default chunk size is not a legal VAD frame"
-)
-def test_silence_detection_works_with_the_default_chunk_size(handler, fake_sd, fake_vad):
-    """webrtcvad only accepts 10, 20 or 30 ms frames.
-
-    CHUNK_SIZE=1024 at 16 kHz is 64 ms, so every ``is_speech`` call raises,
-    the exception is swallowed as a debug log, the silence counter never
-    advances and every utterance records for the full 30 s cap before Whisper
-    even starts.
-    """
-    FakeVad.speech_decider = staticmethod(lambda buf: False)
-    handler.record_until_silence(silence_threshold=0.5, max_duration=30.0)
-    assert FakeInputStream.instances[0].read_calls < int(30.0 * 16000 / 1024)
-
-
-@pytest.mark.xfail(strict=True, reason="BUG-19: VAD is fed multi-channel audio as-is")
-def test_stereo_capture_still_feeds_mono_frames_to_the_vad(settings, fake_sd, fake_vad):
-    """webrtcvad requires 16-bit *mono*.  With CHANNELS=2 the interleaved
-    buffer is handed over unchanged, doubling the apparent frame length."""
-    settings.channels = 2
-    settings.chunk_size = 320
-    instance = AudioHandler()
-    FakeVad.speech_decider = staticmethod(lambda buf: False)
-    instance.record_until_silence(silence_threshold=0.2, max_duration=30.0)
-    assert FakeInputStream.instances[0].read_calls == 11
-
-
-@pytest.mark.xfail(
-    strict=True, reason="BUG-21: recorded audio is 2-D when Whisper wants 1-D"
-)
-def test_recording_returns_a_mono_waveform(handler, fake_sd):
-    """``record_until_silence`` hands a ``(frames, 1)`` array straight to
-    ``STTModule.transcribe``, which forwards it to faster-whisper.  The feature
-    extractor expects a flat mono waveform."""
-    audio = handler.record_until_silence(max_duration=0.2)
-    assert audio.ndim == 1
-
 
 @pytest.mark.xfail(strict=True, reason="BUG-20: no input device selection")
 def test_input_device_can_be_configured(settings, fake_sd):
