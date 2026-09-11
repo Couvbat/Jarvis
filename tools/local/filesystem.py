@@ -425,6 +425,25 @@ def _clobbers_destination(arguments: dict) -> Risk:
     return Risk.WRITE
 
 
+def _parent_scope(arguments: dict) -> str:
+    """Approvals for a file operation cover the directory it happens in."""
+    path = arguments.get("path")
+    return str(Path(str(path or ".")).expanduser().parent)
+
+
+def _directory_scope(arguments: dict) -> str:
+    """For tools whose argument is itself a directory."""
+    path = arguments.get("path")
+    return str(Path(str(path or ".")).expanduser())
+
+
+def _relocation_scope(arguments: dict) -> str:
+    """Moving or copying touches two directories; name both."""
+    source = Path(str(arguments.get("source") or ".")).expanduser().parent
+    destination = Path(str(arguments.get("destination") or ".")).expanduser().parent
+    return f"{source} -> {destination}"
+
+
 def _string(description: str) -> dict:
     return {"type": "string", "description": description}
 
@@ -433,7 +452,8 @@ def build_tools(path_policy: PathPolicy) -> List[ToolSpec]:
     """Build every filesystem tool against one sandbox."""
     fs = FilesystemTools(path_policy)
 
-    def spec(name, handler, description, properties, required, risk, risk_for=None):
+    def spec(name, handler, description, properties, required, risk,
+             risk_for=None, scope_for=_parent_scope):
         return ToolSpec(
             name=namespaced(NAMESPACE, name),
             description=description,
@@ -445,6 +465,7 @@ def build_tools(path_policy: PathPolicy) -> List[ToolSpec]:
             handler=handler,
             risk=risk,
             risk_for=risk_for,
+            scope_for=scope_for,
         )
 
     return [
@@ -462,7 +483,7 @@ def build_tools(path_policy: PathPolicy) -> List[ToolSpec]:
             "list", fs.list_directory,
             "List the files and directories inside a directory",
             {"path": _string("Directory to list")},
-            ["path"], Risk.READ_ONLY,
+            ["path"], Risk.READ_ONLY, scope_for=_directory_scope,
         ),
         spec(
             "stat", fs.stat,
@@ -479,7 +500,7 @@ def build_tools(path_policy: PathPolicy) -> List[ToolSpec]:
                 "content_pattern": _string("Text to look for inside files"),
                 "max_results": {"type": "integer", "description": "Maximum matches"},
             },
-            ["path"], Risk.READ_ONLY,
+            ["path"], Risk.READ_ONLY, scope_for=_directory_scope,
         ),
         spec(
             "write", fs.write,
@@ -509,7 +530,7 @@ def build_tools(path_policy: PathPolicy) -> List[ToolSpec]:
             "mkdir", fs.make_directory,
             "Create a directory, including any missing parent directories",
             {"path": _string("Directory to create")},
-            ["path"], Risk.WRITE,
+            ["path"], Risk.WRITE, scope_for=_directory_scope,
         ),
         spec(
             "delete", fs.delete,
@@ -531,6 +552,7 @@ def build_tools(path_policy: PathPolicy) -> List[ToolSpec]:
                 "destination": _string("Where to move it to"),
             },
             ["source", "destination"], Risk.WRITE, _clobbers_destination,
+            scope_for=_relocation_scope,
         ),
         spec(
             "copy", fs.copy,
@@ -540,5 +562,6 @@ def build_tools(path_policy: PathPolicy) -> List[ToolSpec]:
                 "destination": _string("Where to copy it to"),
             },
             ["source", "destination"], Risk.WRITE, _clobbers_destination,
+            scope_for=_relocation_scope,
         ),
     ]

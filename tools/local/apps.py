@@ -134,6 +134,17 @@ class AppTools:
         return ToolResult(output or f"'{name}' finished with no output")
 
 
+def _command_scope(arguments: dict) -> str:
+    """Approvals for a launch cover that exact command line and nothing else."""
+    application = str(arguments.get("application") or "")
+    args = arguments.get("args") or []
+    if isinstance(args, (list, tuple)):
+        rendered = " ".join(str(a) for a in args)
+    else:
+        rendered = str(args)
+    return f"{application} {rendered}".strip()
+
+
 def build_tools(
     command_whitelist: Sequence[str],
     gui_applications: Sequence[str] = (),
@@ -164,6 +175,7 @@ def build_tools(
                 "required": ["application"],
             },
             handler=apps.launch,
+            scope_for=_command_scope,
             # Whatever the whitelist allows, running it is outside the
             # filesystem sandbox, so this never counts as a safe call.
             risk=Risk.DESTRUCTIVE,

@@ -87,6 +87,12 @@ class ToolSpec:
     #: believed: how much weight they carry is the policy engine's call.
     hints: Dict[str, Any] = field(default_factory=dict)
 
+    #: What an approval for a call should cover, derived from its arguments -
+    #: a directory for a file write, a domain for a fetch. The tool knows this;
+    #: the policy engine does not. Without one, approvals cover exactly the
+    #: arguments given, which is the narrowest and safest default.
+    scope_for: Optional[Callable[[Dict[str, Any]], str]] = None
+
     def assess(self, arguments: Dict[str, Any]) -> Risk:
         """The risk of calling this tool with these arguments."""
         if self.risk_for is None:

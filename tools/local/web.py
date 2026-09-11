@@ -180,6 +180,14 @@ class WebTools:
         return " ".join(line for line in lines if line)
 
 
+def _domain_scope(arguments: dict) -> str:
+    """Approvals for a fetch cover the site, not the individual page."""
+    try:
+        return urlparse(str(arguments.get("url") or "")).netloc or "(no host)"
+    except ValueError:
+        return "(unparseable)"
+
+
 def build_tools(
     allow_private_network: bool = False,
     max_bytes: int = 2_000_000,
@@ -203,5 +211,6 @@ def build_tools(
             # makes it an exfiltration channel worth tracking.
             risk=Risk.READ_ONLY,
             egress=True,
+            scope_for=_domain_scope,
         ),
     ]
