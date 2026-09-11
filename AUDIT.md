@@ -1,6 +1,8 @@
 # Jarvis — Rapport d'état du code
 
-Audit du dépôt à la date du 11 septembre 2026 (commit `bc9a176`).
+Audit du dépôt à la date du 11 septembre 2026 (commit `bc9a176`), mesuré
+contre l'objectif du projet : un assistant vocal 100 % local avec tool
+calling, CRUD système de fichiers et connexion MCP à des services externes.
 Périmètre : les 9 modules Python, la configuration, les scripts d'installation
 et la documentation. Chaque anomalie porte un identifiant `BUG-xx` repris
 verbatim dans la suite de tests (`tests/`), sous forme de test `xfail(strict)`
@@ -227,5 +229,65 @@ bibliothèques, ce qui est précisément ce qui permet à la suite de mettre
 BUG-18 et BUG-08 en évidence. La suite tourne donc sans PortAudio, sans
 compilateur C, sans téléchargement de modèle et sans serveur Ollama.
 
-Voir [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) pour le plan de
-correction et de complétion.
+---
+
+## 6. Écart avec l'objectif final
+
+L'objectif du projet est un assistant vocal 100 % local avec tool calling,
+CRUD système de fichiers et connexion MCP à des services externes. Mesuré
+contre cette cible — et non contre le README — voici ce qui manque.
+
+### Acquis
+
+- Chaîne STT → LLM → TTS entièrement locale : les briques sont là et bien
+  choisies (faster-whisper, Ollama, Piper).
+- Sandbox de chemins solide : résolution des symlinks, traversée `..`
+  bloquée, préfixes voisins correctement rejetés. C'est la partie la mieux
+  écrite du dépôt.
+- Confirmation avec approbation persistante : le modèle est le bon, il est
+  seulement appliqué trop partiellement.
+
+### Manquant
+
+| Brique de l'objectif | État |
+|---|---|
+| Tool calling | 🔴 **Cassé** (BUG-08), et le format d'historique n'est pas celui du protocole (BUG-09) |
+| **C**reate système de fichiers | ✅ |
+| **R**ead système de fichiers | 🟡 Pas de pagination ni de lecture par plage — un gros fichier ne tient pas dans le contexte |
+| **U**pdate système de fichiers | ❌ **Absent** — aucune écriture partielle, aucun ajout, aucun remplacement |
+| **D**elete système de fichiers | 🟡 Fichiers seulement, pas de répertoires |
+| Déplacement, copie, recherche | ❌ Absent |
+| **Connexion MCP** | ❌ **Absent** — aucune trace dans le dépôt |
+| Registre d'outils extensible | ❌ Liste codée en dur + dispatch en `if/elif` |
+| Pipeline asynchrone | ❌ Entièrement synchrone — le SDK MCP est async |
+| Génération et synthèse en flux | ❌ Pipeline strictement séquentiel (~3-8 s avant le premier son) |
+| Interruption pendant la réponse | ❌ Absent |
+| Persistance des conversations | ❌ Mémoire vive uniquement |
+
+### Les trois obstacles structurels
+
+1. **`action_executor.py` est un cul-de-sac architectural.** Liste d'outils
+   codée en dur dans `llm_module.py`, dispatch en `if/elif`, politique de
+   confirmation mêlée à l'exécution. Chaque nouvelle capacité passe par ce
+   fichier. MCP, qui apporte des dizaines d'outils découverts à l'exécution,
+   n'a aucun point d'accroche.
+
+2. **Le code est synchrone, le SDK MCP est asynchrone.** `ClientSession`,
+   `stdio_client` et `ClientSessionGroup` sont des gestionnaires de contexte
+   async. Le streaming et l'interruption exigeront de toute façon
+   l'asynchrone : le passage doit se faire avant de brancher MCP, pas pendant.
+
+3. **Le modèle de sécurité ne tient pas à l'échelle de MCP.** Aujourd'hui les
+   trois outils sont écrits dans le dépôt et audités. Un serveur MCP est un
+   tiers dont les *descriptions d'outils* entrent dans le prompt et dont les
+   résultats reviennent dans la conversation. Combiné à l'accès fichiers et à
+   la récupération web, Jarvis réunira les trois conditions qui rendent
+   l'injection de prompt exploitable — avec un modèle local, qui y résiste
+   moins bien qu'un modèle frontière.
+
+**À noter** : ces failles ne sont pas exploitables aujourd'hui, puisque
+BUG-08 fait qu'aucun outil ne s'exécute jamais. Corriger BUG-08 les rend
+atteignables. C'est la raison pour laquelle le plan lie les Phases 0 et 1.
+
+Voir [`ARCHITECTURE.md`](ARCHITECTURE.md) pour l'architecture cible et
+[`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) pour le chemin.

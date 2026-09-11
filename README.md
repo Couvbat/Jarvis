@@ -404,8 +404,12 @@ about a second. See [tests/README.md](tests/README.md).
 
 ### Project status
 
+The goal is a fully local voice assistant — STT and TTS on-device — with tool
+calling, CRUD filesystem access, and MCP connections to external services.
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — the target design and the decisions behind it
 - [AUDIT.md](AUDIT.md) — what is implemented, what is not, and the known bugs
-- [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — the plan to close the gaps
+- [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — the phased path to the target
 - [FEATURES_IDEA.md](FEATURES_IDEA.md) — longer-term feature ideas
 
 Known bugs are each pinned by an `xfail(strict=True)` test carrying their
