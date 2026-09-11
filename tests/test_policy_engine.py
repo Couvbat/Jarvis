@@ -270,6 +270,52 @@ class TestTaintEscalation:
         assert decision.surface is Surface.VOICE
 
 
+class TestPrecheck:
+    """A call that cannot succeed is refused before the user is asked.
+
+    A confirmation prompt spends the user's attention; spending it on
+    something that will be refused anyway teaches them to wave prompts
+    through, which is the failure mode the whole design is guarding against.
+    """
+
+    def test_a_refused_call_is_not_allowed(self, engine):
+        spec = make_spec(precheck=lambda a: "outside the allowed directories")
+        decision = engine.evaluate(spec, {"path": "/etc/passwd"})
+        assert decision.allowed is False
+        assert "outside the allowed directories" in decision.reason
+
+    def test_a_refused_call_asks_for_nothing(self, engine):
+        spec = make_spec(precheck=lambda a: "nope")
+        decision = engine.evaluate(spec, {"path": "/etc/passwd"})
+        assert decision.needs_confirmation is False
+        assert decision.surface is Surface.NONE
+
+    def test_a_refused_destructive_call_is_not_escalated(self, engine):
+        """Refusal wins over the keyboard prompt: nothing to confirm."""
+        spec = make_spec(risk=Risk.DESTRUCTIVE, precheck=lambda a: "nope")
+        assert engine.evaluate(spec, {"path": "/etc"}).allowed is False
+
+    def test_passing_the_precheck_proceeds_normally(self, engine):
+        spec = make_spec(precheck=lambda a: None)
+        decision = engine.evaluate(spec, {"path": "/tmp/a"})
+        assert decision.allowed is True
+        assert decision.surface is Surface.VOICE
+
+    def test_a_precheck_that_raises_refuses_rather_than_crashing(self, engine):
+        def explode(arguments):
+            raise RuntimeError("cannot tell")
+
+        decision = engine.evaluate(make_spec(precheck=explode), {"path": "/tmp/a"})
+        assert decision.allowed is False
+
+    def test_a_refused_call_is_never_stored_as_an_approval(self, engine, store):
+        spec = make_spec(precheck=lambda a: "nope")
+        decision = engine.evaluate(spec, {"path": "/etc/passwd"})
+        if decision.allowed:  # pragma: no cover - guarded by the test above
+            engine.remember(decision)
+        assert store.all() == []
+
+
 class TestScope:
     def test_a_tool_without_a_scope_grants_only_these_arguments(self, engine):
         """An unfamiliar tool - an MCP one, say - gets the narrowest grant."""

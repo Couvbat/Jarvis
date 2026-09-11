@@ -16,7 +16,7 @@ import functools
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Optional
 
 from policy.paths import PathPolicy
 from tools.schema import Risk, ToolResult, ToolSpec, namespaced
@@ -448,12 +448,29 @@ def _string(description: str) -> dict:
     return {"type": "string", "description": description}
 
 
+def _path_precheck(path_policy: PathPolicy, *keys: str):
+    """Refuse a call whose paths are out of bounds, before anyone is asked."""
+    def check(arguments: dict) -> Optional[str]:
+        for key in keys:
+            value = arguments.get(key)
+            if value is None or str(value).strip() == "":
+                continue
+            verdict = path_policy.check(value)
+            if not verdict.allowed:
+                return verdict.reason
+        return None
+
+    return check
+
+
 def build_tools(path_policy: PathPolicy) -> List[ToolSpec]:
     """Build every filesystem tool against one sandbox."""
     fs = FilesystemTools(path_policy)
+    check_path = _path_precheck(path_policy, "path")
+    check_relocation = _path_precheck(path_policy, "source", "destination")
 
     def spec(name, handler, description, properties, required, risk,
-             risk_for=None, scope_for=_parent_scope):
+             risk_for=None, scope_for=_parent_scope, precheck=None):
         return ToolSpec(
             name=namespaced(NAMESPACE, name),
             description=description,
@@ -466,6 +483,7 @@ def build_tools(path_policy: PathPolicy) -> List[ToolSpec]:
             risk=risk,
             risk_for=risk_for,
             scope_for=scope_for,
+            precheck=precheck if precheck is not None else check_path,
         )
 
     return [
@@ -552,7 +570,7 @@ def build_tools(path_policy: PathPolicy) -> List[ToolSpec]:
                 "destination": _string("Where to move it to"),
             },
             ["source", "destination"], Risk.WRITE, _clobbers_destination,
-            scope_for=_relocation_scope,
+            scope_for=_relocation_scope, precheck=check_relocation,
         ),
         spec(
             "copy", fs.copy,
@@ -562,6 +580,6 @@ def build_tools(path_policy: PathPolicy) -> List[ToolSpec]:
                 "destination": _string("Where to copy it to"),
             },
             ["source", "destination"], Risk.WRITE, _clobbers_destination,
-            scope_for=_relocation_scope,
+            scope_for=_relocation_scope, precheck=check_relocation,
         ),
     ]

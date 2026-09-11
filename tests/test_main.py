@@ -7,6 +7,10 @@ import pytest
 
 import main as main_module
 from main import Jarvis, is_exit_command, normalise_utterance
+from policy.engine import Decision, Surface
+from policy.store import ApprovalStore
+from tools.registry import ToolRegistry
+from tools.schema import Risk, ToolResult, ToolSpec
 
 
 class FakeAudio:
@@ -46,6 +50,7 @@ class FakeLLM:
         self.chats = []          # user messages passed to chat()
         self.follow_ups = 0      # continue_after_tools() calls
         self.tool_results = []
+        self.untrusted_results = []
 
     def _next(self):
         if self.script:
@@ -60,18 +65,10 @@ class FakeLLM:
         self.follow_ups += 1
         return self._next()
 
-    def add_tool_result(self, name, result):
+    def add_tool_result(self, name, result, untrusted=False):
         self.tool_results.append((name, result))
-
-
-class FakeExecutor:
-    def __init__(self, confirmation_callback=None):
-        self.confirmation_callback = confirmation_callback
-        self.executed = []
-
-    def execute_tool_call(self, tool_call):
-        self.executed.append(tool_call)
-        return "tool ok"
+        if untrusted:
+            self.untrusted_results.append(name)
 
 
 class FakeTTS:
@@ -90,26 +87,52 @@ class FakeTTS:
         return np.zeros(2205, dtype=np.int16), self.sample_rate
 
 
+def build_test_registry(executed, risk=Risk.READ_ONLY):
+    """A real registry holding recording tools, so dispatch is not faked."""
+    def record(**kwargs):
+        executed.append(kwargs)
+        return ToolResult("tool ok")
+
+    registry = ToolRegistry()
+    for name in ("fs__write", "web__fetch", "fs__read"):
+        registry.register(ToolSpec(
+            name=name,
+            description=f"{name} does something",
+            input_schema={"type": "object", "properties": {}},
+            handler=record,
+            risk=risk,
+        ))
+    return registry
+
+
 @pytest.fixture
 def wiring(monkeypatch):
-    """Replace every subsystem with an inspectable fake."""
+    """Replace the process boundaries; keep the registry and policy real."""
+    executed = []
+    registry = build_test_registry(executed)
     parts = {
         "audio": FakeAudio(),
         "stt": FakeSTT(),
         "llm": FakeLLM(),
         "tts": FakeTTS(),
+        "registry": registry,
+        "executed": executed,
     }
     monkeypatch.setattr(main_module, "AudioHandler", lambda: parts["audio"])
     monkeypatch.setattr(main_module, "STTModule", lambda: parts["stt"])
-    monkeypatch.setattr(main_module, "LLMModule", lambda: parts["llm"])
+    monkeypatch.setattr(main_module, "LLMModule", lambda registry=None: parts["llm"])
     monkeypatch.setattr(main_module, "TTSModule", lambda: parts["tts"])
-    monkeypatch.setattr(main_module, "ActionExecutor", FakeExecutor)
+    monkeypatch.setattr(main_module, "build_default_registry", lambda: registry)
+    monkeypatch.setattr(main_module, "ApprovalStore", lambda path: ApprovalStore(":memory:"))
     return parts
 
 
 @pytest.fixture
 def jarvis(wiring):
-    return Jarvis(use_tui=False)
+    """A Jarvis that approves every confirmation, so tests can focus on flow."""
+    instance = Jarvis(use_tui=False)
+    instance._confirm = lambda decision: (True, False)
+    return instance
 
 
 class TestUtteranceNormalisation:
@@ -169,15 +192,30 @@ class TestStartup:
         assert wiring["stt"].initialized is True
         assert wiring["tts"].initialized is True
 
-    def test_executor_gets_the_confirmation_callback(self, jarvis):
-        assert jarvis.executor.confirmation_callback == jarvis._confirmation_callback
+    def test_tools_and_policy_are_assembled(self, jarvis, wiring):
+        assert jarvis.registry is wiring["registry"]
+        assert jarvis.policy is not None
+        assert jarvis.taint.tainted is False
 
     def test_no_tui_by_default(self, jarvis):
         assert jarvis.use_tui is False
         assert jarvis.tui is None
 
 
+def make_decision(surface=Surface.VOICE, risk=Risk.WRITE):
+    return Decision(
+        tool="fs__write", risk=risk, scope="/tmp",
+        surface=surface, summary="fs__write (path=/tmp/a.txt)",
+        reason="write access",
+    )
+
+
 class TestConfirmationPrompt:
+    @pytest.fixture
+    def asking(self, wiring):
+        """A Jarvis with the real _confirm, not the auto-approving stub."""
+        return Jarvis(use_tui=False)
+
     @pytest.mark.parametrize("answer,expected", [
         ("y", (True, False)),
         ("a", (True, True)),
@@ -185,14 +223,34 @@ class TestConfirmationPrompt:
         ("Y", (True, False)),
         (" a ", (True, True)),
     ])
-    def test_answers(self, jarvis, monkeypatch, answer, expected):
+    def test_answers(self, asking, monkeypatch, answer, expected):
         monkeypatch.setattr(builtins, "input", lambda *a: answer)
-        assert jarvis._confirmation_callback("delete x", "delete_file:/tmp") == expected
+        assert asking._confirm(make_decision()) == expected
 
-    def test_invalid_answer_reprompts(self, jarvis, monkeypatch):
+    def test_invalid_answers_reprompt(self, asking, monkeypatch):
         answers = iter(["maybe", "", "y"])
         monkeypatch.setattr(builtins, "input", lambda *a: next(answers))
-        assert jarvis._confirmation_callback("delete x", "item") == (True, False)
+        assert asking._confirm(make_decision()) == (True, False)
+
+    def test_the_real_arguments_are_shown(self, asking, monkeypatch, capsys):
+        monkeypatch.setattr(builtins, "input", lambda *a: "n")
+        asking._confirm(make_decision())
+        output = capsys.readouterr().out
+        assert "path=/tmp/a.txt" in output
+        assert "write access" in output
+
+    def test_a_terminal_decision_does_not_offer_always(self, asking, monkeypatch, capsys):
+        """Destructive and tainted calls should be seen every time."""
+        monkeypatch.setattr(builtins, "input", lambda *a: "n")
+        asking._confirm(make_decision(Surface.TERMINAL, Risk.DESTRUCTIVE))
+        output = capsys.readouterr().out
+        assert "stop asking" not in output
+        assert "keyboard" in output
+
+    def test_always_is_refused_on_a_terminal_decision(self, asking, monkeypatch):
+        answers = iter(["a", "y"])
+        monkeypatch.setattr(builtins, "input", lambda *a: next(answers))
+        assert asking._confirm(make_decision(Surface.TERMINAL)) == (True, False)
 
 
 class TestProcessUserInput:
@@ -206,46 +264,46 @@ class TestProcessUserInput:
         assert len(wiring["llm"].chats) == 1
 
     def test_tool_calls_are_executed(self, jarvis, wiring):
-        call = {"function": {"name": "fetch_web_page", "arguments": {"url": "u"}}}
+        call = {"function": {"name": "web__fetch", "arguments": {"url": "u"}}}
         wiring["llm"].script = [
             {"response": "", "tool_calls": [call]},
             {"response": "Voici le résumé", "tool_calls": None},
         ]
         assert jarvis.process_user_input("lis le site") == "Voici le résumé"
-        assert jarvis.executor.executed == [call]
+        assert wiring["executed"] == [{"url": "u"}]
 
     def test_tool_results_are_fed_back(self, jarvis, wiring):
-        call = {"function": {"name": "fetch_web_page", "arguments": {"url": "u"}}}
+        call = {"function": {"name": "web__fetch", "arguments": {"url": "u"}}}
         wiring["llm"].script = [
             {"response": "", "tool_calls": [call]},
             {"response": "done", "tool_calls": None},
         ]
         jarvis.process_user_input("lis le site")
-        assert wiring["llm"].tool_results == [("fetch_web_page", "tool ok")]
+        assert wiring["llm"].tool_results == [("web__fetch", "tool ok")]
 
     def test_a_second_round_of_tool_calls_also_runs(self, jarvis, wiring):
         """The follow-up turn may ask for more tools; they must be executed."""
-        first = {"function": {"name": "execute_file_operation", "arguments": {}}}
-        second = {"function": {"name": "fetch_web_page", "arguments": {}}}
+        first = {"function": {"name": "fs__write", "arguments": {"n": 1}}}
+        second = {"function": {"name": "web__fetch", "arguments": {"n": 2}}}
         wiring["llm"].script = [
             {"response": "", "tool_calls": [first]},
             {"response": "", "tool_calls": [second]},
             {"response": "fini", "tool_calls": None},
         ]
         assert jarvis.process_user_input("fais les deux") == "fini"
-        assert jarvis.executor.executed == [first, second]
+        assert wiring["executed"] == [{"n": 1}, {"n": 2}]
 
     def test_the_tool_loop_is_bounded(self, jarvis, wiring):
         """A model that keeps asking for tools must not loop forever."""
-        call = {"function": {"name": "fetch_web_page", "arguments": {}}}
+        call = {"function": {"name": "web__fetch", "arguments": {}}}
         wiring["llm"].script = [
             {"response": "", "tool_calls": [call]} for _ in range(50)
         ]
         jarvis.process_user_input("boucle")
-        assert len(jarvis.executor.executed) == FakeLLM.MAX_TOOL_ITERATIONS
+        assert len(wiring["executed"]) == FakeLLM.MAX_TOOL_ITERATIONS
 
     def test_the_follow_up_is_not_a_user_turn(self, jarvis, wiring):
-        call = {"function": {"name": "fetch_web_page", "arguments": {}}}
+        call = {"function": {"name": "web__fetch", "arguments": {}}}
         wiring["llm"].script = [
             {"response": "", "tool_calls": [call]},
             {"response": "done", "tool_calls": None},
@@ -256,15 +314,15 @@ class TestProcessUserInput:
 
     def test_several_tool_calls_all_run(self, jarvis, wiring):
         calls = [
-            {"function": {"name": "execute_file_operation", "arguments": {}}},
-            {"function": {"name": "fetch_web_page", "arguments": {}}},
+            {"function": {"name": "fs__write", "arguments": {}}},
+            {"function": {"name": "web__fetch", "arguments": {}}},
         ]
         wiring["llm"].script = [
             {"response": "", "tool_calls": calls},
             {"response": "done", "tool_calls": None},
         ]
         jarvis.process_user_input("fais deux choses")
-        assert len(jarvis.executor.executed) == 2
+        assert len(wiring["executed"]) == 2
 
 
 class TestVoiceLoop:
@@ -479,8 +537,8 @@ class RecordingTUI:
     def update_language(self, language):
         self.language = language
 
-    def prompt_confirmation(self, description, item):
-        self.events.append(("prompt_confirmation", (description, item)))
+    def prompt_confirmation(self, decision):
+        self.events.append(("prompt_confirmation", (decision,)))
         return (True, False)
 
 
@@ -507,7 +565,7 @@ class TestTuiMode:
         assert tui_jarvis._tui.language is not None
 
     def test_confirmation_is_delegated_to_the_tui(self, tui_jarvis):
-        assert tui_jarvis._confirmation_callback("delete x", "item") == (True, False)
+        assert tui_jarvis._confirm(make_decision()) == (True, False)
         assert any(name == "prompt_confirmation"
                    for name, _ in tui_jarvis._tui.events)
 
@@ -527,23 +585,23 @@ class TestTuiMode:
             assert status in tui_jarvis._tui.statuses
 
     def test_tool_calls_are_logged_to_the_actions_panel(self, tui_jarvis, wiring):
-        call = {"function": {"name": "fetch_web_page", "arguments": {"url": "u"}}}
+        call = {"function": {"name": "web__fetch", "arguments": {"url": "u"}}}
         wiring["llm"].script = [
             {"response": "", "tool_calls": [call]},
             {"response": "done", "tool_calls": None},
         ]
         tui_jarvis.process_user_input("lis le site")
         logged = [args for name, args in tui_jarvis._tui.events if name == "add_action"]
-        assert any("fetch_web_page" in args[0] for args in logged)
+        assert any("web__fetch" in args[0] for args in logged)
 
     def test_a_failed_tool_is_logged_as_an_error(self, tui_jarvis, wiring, monkeypatch):
-        call = {"function": {"name": "fetch_web_page", "arguments": {}}}
+        call = {"function": {"name": "web__fetch", "arguments": {}}}
         wiring["llm"].script = [
             {"response": "", "tool_calls": [call]},
             {"response": "done", "tool_calls": None},
         ]
         monkeypatch.setattr(
-            tui_jarvis.executor, "execute_tool_call", lambda c: "Error: boom"
+            tui_jarvis.registry, "call", lambda name, args: ToolResult.error("boom")
         )
         tui_jarvis.process_user_input("lis le site")
         statuses = [args[-1] for name, args in tui_jarvis._tui.events

@@ -7,7 +7,11 @@ from config import settings
 from audio_handler import AudioHandler
 from stt_module import STTModule
 from llm_module import LLMModule
-from action_executor import ActionExecutor
+from policy.engine import PolicyEngine, Surface
+from policy.store import ApprovalStore
+from policy.taint import TaintState
+from tools.builtin import build_default_registry
+from tools.schema import ToolResult
 from tts_module import TTSModule
 from tui import JarvisTUI
 
@@ -69,11 +73,15 @@ class Jarvis:
         
         logger.info("Initializing Jarvis...")
         
+        # Tools and the policy that gates them
+        self.registry = build_default_registry()
+        self.policy = PolicyEngine(ApprovalStore(settings.approvals_path))
+        self.taint = TaintState()
+
         # Initialize components
         self.audio = AudioHandler()
         self.stt = STTModule()
-        self.llm = LLMModule()
-        self.executor = ActionExecutor(confirmation_callback=self._confirmation_callback)
+        self.llm = LLMModule(self.registry)
         self.tts = TTSModule()
         
         # Load models
@@ -87,43 +95,45 @@ class Jarvis:
             self.tui.update_status("Ready")
             self.tui.update_language(settings.whisper_language)
     
-    def _confirmation_callback(self, action_description: str, item: str) -> tuple[bool, bool]:
-        """
-        Handle confirmation requests for actions.
-        
-        Args:
-            action_description: Description of the action
-            item: Item to potentially whitelist
-            
-        Returns:
-            Tuple of (execute_action, add_to_whitelist)
+    def _confirm(self, decision) -> tuple[bool, bool]:
+        """Ask the user about one call.
+
+        Returns (go ahead, remember this for next time).
+
+        Spoken confirmation is not implemented yet, so a VOICE decision is
+        asked at the keyboard too. The distinction is still enforced where it
+        matters: a TERMINAL decision never offers "always", because those are
+        the destructive and tainted calls that should be seen every time.
         """
         if self.use_tui and self.tui:
-            return self.tui.prompt_confirmation(action_description, item)
-        else:
-            # Simple text-based confirmation
-            print(f"\n[CONFIRMATION REQUIRED]")
-            print(f"Action: {action_description}")
-            print(f"Item: {item}")
-            print("\nOptions:")
-            print("  y - Execute this action")
-            print("  a - Execute and add to whitelist")
-            print("  n - Cancel this action")
-            
-            while True:
-                choice = input("\nYour choice (y/a/n): ").lower().strip()
-                
-                if choice == 'y':
-                    return (True, False)
-                elif choice == 'a':
-                    print(f"✓ Added to whitelist: {item}")
-                    return (True, True)
-                elif choice == 'n':
-                    print("✗ Action cancelled")
-                    return (False, False)
-                else:
-                    print("Invalid choice. Please enter y, a, or n.")
-    
+            return self.tui.prompt_confirmation(decision)
+
+        may_remember = decision.surface is not Surface.TERMINAL
+
+        print("\n[CONFIRMATION REQUIRED]")
+        if decision.surface is Surface.TERMINAL:
+            print("This one needs your keyboard, not your voice.")
+        print(f"Action: {decision.summary}")
+        print(f"Why ask: {decision.reason}")
+        print(f"Risk:   {decision.risk.name}")
+        print("\nOptions:")
+        print("  y - do it once")
+        if may_remember:
+            print(f"  a - do it and stop asking for {decision.scope}")
+        print("  n - don't")
+
+        choices = "y/a/n" if may_remember else "y/n"
+        while True:
+            choice = input(f"\nYour choice ({choices}): ").lower().strip()
+            if choice == "y":
+                return (True, False)
+            if choice == "a" and may_remember:
+                return (True, True)
+            if choice == "n":
+                print("Cancelled")
+                return (False, False)
+            print(f"Please answer {choices}.")
+
     def _speak(self, text: str):
         """Say something out loud, falling back to the terminal if TTS fails."""
         try:
@@ -152,6 +162,10 @@ class Jarvis:
         """
         if self.use_tui:
             self.tui.update_status("Thinking...")
+
+        # Taint is per turn: what the assistant read a minute ago should not
+        # keep prompting for the rest of the session.
+        self.taint.reset()
 
         result = self.llm.chat(user_text)
 
@@ -185,28 +199,50 @@ class Jarvis:
 
         return result["response"]
 
-    def _execute_tool_call(self, tool_call: dict) -> str:
-        """Execute one tool call and record it in the conversation and the UI."""
+    def _execute_tool_call(self, tool_call: dict) -> ToolResult:
+        """Run one tool call, subject to policy, and record it everywhere."""
         function = tool_call.get("function", {})
-        function_name = function.get("name", "unknown")
-        arguments = function.get("arguments", {})
+        name = function.get("name", "unknown")
+        arguments = function.get("arguments") or {}
 
         if self.use_tui:
-            action_details = str(arguments)
-            if len(action_details) > 100:
-                action_details = action_details[:100] + "..."
-            self.tui.add_action(function_name, action_details, "info")
+            details = str(arguments)
+            self.tui.add_action(name, details[:100], "info")
 
-        tool_result = self.executor.execute_tool_call(tool_call)
+        spec = self.registry.get(name)
+        if spec is None:
+            result = ToolResult.error(f"unknown tool '{name}'")
+        else:
+            decision = self.policy.evaluate(spec, arguments, self.taint)
+
+            if not decision.allowed:
+                # Refused outright: the user is never asked about a call that
+                # could not have run anyway.
+                logger.info(f"Refused {name}: {decision.reason}")
+                result = ToolResult.error(decision.reason)
+            elif decision.needs_confirmation:
+                proceed, remember = self._confirm(decision)
+                if not proceed:
+                    result = ToolResult.error("the user declined this action")
+                else:
+                    if remember:
+                        self.policy.remember(decision)
+                    result = self.registry.call(name, arguments)
+            else:
+                logger.info(f"Auto-approved {name}: {decision.reason}")
+                result = self.registry.call(name, arguments)
+
+        # Record before the model sees it: a result from outside the machine
+        # raises the bar for whatever it asks for next.
+        self.taint.observe(name, result)
 
         if self.use_tui:
-            failed = "Error" in tool_result or "cancelled" in tool_result
             self.tui.add_action(
-                function_name, tool_result[:80], "error" if failed else "success"
+                name, result.content[:80], "success" if result.ok else "error"
             )
 
-        self.llm.add_tool_result(function_name, tool_result)
-        return tool_result
+        self.llm.add_tool_result(name, result.content, untrusted=result.untrusted)
+        return result
 
     def run_interactive(self):
         """Run in interactive voice mode."""

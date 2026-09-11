@@ -32,6 +32,41 @@ def registry(root):
     return instance
 
 
+class TestArgumentCoercion:
+    def test_a_boolean_is_not_a_number(self, fs, root):
+        (root / "a.txt").write_text("x")
+        result = fs.read(root / "a.txt", start_line=True)
+        assert result.ok is False
+        assert "must be a number" in result.content
+
+    @pytest.mark.parametrize("value,expected", [
+        (True, True), (False, False), (1, True), (0, False),
+        ("true", True), ("YES", True), ("no", False), ("", False), (None, False),
+    ])
+    def test_boolean_coercion(self, value, expected):
+        assert filesystem._as_bool(value, default=False) is expected
+
+    def test_an_empty_path_is_reported(self, fs):
+        result = fs.read("")
+        assert result.ok is False
+        assert "path is required" in result.content
+
+    def test_a_missing_path_is_reported(self, fs):
+        assert fs.read(None).ok is False
+
+    def test_an_unreadable_file_is_reported_not_raised(self, fs, root, monkeypatch):
+        target = root / "a.txt"
+        target.write_text("x")
+
+        def explode(*args, **kwargs):
+            raise OSError("I/O error")
+
+        monkeypatch.setattr(Path, "read_text", explode)
+        result = fs.read(target)
+        assert result.ok is False
+        assert "could not read" in result.content
+
+
 class TestRead:
     def test_reads_a_file(self, fs, root):
         (root / "a.txt").write_text("hello\nworld\n")
@@ -451,3 +486,29 @@ class TestToolSpecs:
 
     def test_a_missing_required_argument_is_reported(self, registry):
         assert registry.call("fs__read", {}).ok is False
+
+    def test_every_tool_refuses_an_out_of_sandbox_path_up_front(self, registry, tmp_path):
+        """The precheck lets the policy engine refuse without asking the user."""
+        outside = str(tmp_path / "outside.txt")
+        for name in registry.names():
+            spec = registry.get(name)
+            arguments = (
+                {"source": outside, "destination": outside}
+                if "source" in spec.input_schema["properties"] else {"path": outside}
+            )
+            assert spec.precheck(arguments), f"{name} has no path precheck"
+
+    def test_the_precheck_passes_for_a_path_inside(self, registry, root):
+        assert registry.get("fs__read").precheck({"path": str(root / "a.txt")}) is None
+
+    def test_the_relocation_precheck_checks_both_ends(self, registry, root, tmp_path):
+        spec = registry.get("fs__move")
+        assert spec.precheck(
+            {"source": str(root / "a"), "destination": str(tmp_path / "out")}
+        )
+        assert spec.precheck(
+            {"source": str(tmp_path / "out"), "destination": str(root / "a")}
+        )
+        assert spec.precheck(
+            {"source": str(root / "a"), "destination": str(root / "b")}
+        ) is None

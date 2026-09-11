@@ -134,6 +134,31 @@ class AppTools:
         return ToolResult(output or f"'{name}' finished with no output")
 
 
+def _whitelist_precheck(command_whitelist: Sequence[str]):
+    """Refuse a command that is not whitelisted, before anyone is asked."""
+    allowed = [c.strip() for c in command_whitelist if c and c.strip()]
+
+    def check(arguments: dict) -> Optional[str]:
+        raw = str(arguments.get("application") or "").strip()
+        if not raw:
+            return "application is required"
+        try:
+            parts = shlex.split(raw)
+        except ValueError as e:
+            return f"could not parse command: {e}"
+        if not parts:
+            return "application is required"
+        name = Path(parts[0]).name
+        if name not in allowed:
+            return (
+                f"'{name}' is not in the command whitelist "
+                f"({', '.join(allowed) or 'empty'})"
+            )
+        return None
+
+    return check
+
+
 def _command_scope(arguments: dict) -> str:
     """Approvals for a launch cover that exact command line and nothing else."""
     application = str(arguments.get("application") or "")
@@ -176,6 +201,7 @@ def build_tools(
             },
             handler=apps.launch,
             scope_for=_command_scope,
+            precheck=_whitelist_precheck(command_whitelist),
             # Whatever the whitelist allows, running it is outside the
             # filesystem sandbox, so this never counts as a safe call.
             risk=Risk.DESTRUCTIVE,

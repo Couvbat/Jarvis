@@ -105,11 +105,23 @@ class PolicyEngine:
         scope = self.scope_for(spec, arguments)
         summary = summarise(spec.name, arguments)
 
-        def decide(surface: Surface, reason: str = "") -> Decision:
+        def decide(surface: Surface, reason: str = "", allowed: bool = True) -> Decision:
             return Decision(
                 tool=spec.name, risk=risk, scope=scope,
-                surface=surface, summary=summary, reason=reason,
+                surface=surface, summary=summary, reason=reason, allowed=allowed,
             )
+
+        # Refuse before asking. A prompt spends the user's attention, and
+        # spending it on a call that will be refused anyway teaches them to
+        # answer without reading.
+        if spec.precheck is not None:
+            try:
+                refusal = spec.precheck(arguments)
+            except Exception as e:
+                logger.warning(f"{spec.name} precheck failed: {e}")
+                refusal = f"could not validate the call: {e}"
+            if refusal:
+                return decide(Surface.NONE, refusal, allowed=False)
 
         # Destroying something is always shown to the user, and always at the
         # keyboard. A standing approval never covers it: deleting is exactly

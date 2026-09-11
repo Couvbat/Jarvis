@@ -5,7 +5,17 @@ import io
 import pytest
 from rich.console import Console
 
+from policy.engine import Decision, Surface
+from tools.schema import Risk
 from tui import JarvisTUI
+
+
+def make_decision(surface=Surface.VOICE, risk=Risk.WRITE):
+    return Decision(
+        tool="fs__write", risk=risk, scope="/tmp/docs",
+        surface=surface, summary="fs__write (path=/tmp/docs/a.txt)",
+        reason="write access",
+    )
 
 
 @pytest.fixture
@@ -132,10 +142,10 @@ class TestRendering:
 
 
 class TestConfirmationPrompt:
-    def _answer(self, tui, answers):
+    def _answer(self, tui, answers, decision=None):
         responses = iter(answers)
         tui.console.input = lambda *args, **kwargs: next(responses)
-        return tui.prompt_confirmation("delete /tmp/x", "delete_file:/tmp")
+        return tui.prompt_confirmation(decision or make_decision())
 
     def test_yes(self, tui):
         assert self._answer(tui, ["y"]) == (True, False)
@@ -152,9 +162,30 @@ class TestConfirmationPrompt:
     def test_invalid_answers_reprompt(self, tui):
         assert self._answer(tui, ["maybe", "", "n"]) == (False, False)
 
-    def test_the_action_is_shown_to_the_user(self, tui):
+    def test_the_real_arguments_are_shown(self, tui):
+        """"fs__write (path=...)" is a decision someone can make."""
         self._answer(tui, ["n"])
-        assert "delete /tmp/x" in tui.console.file.getvalue()
+        output = tui.console.file.getvalue()
+        assert "path=/tmp/docs/a.txt" in output
+        assert "write access" in output
+
+    def test_the_risk_level_is_shown(self, tui):
+        self._answer(tui, ["n"])
+        assert "WRITE" in tui.console.file.getvalue()
+
+    def test_the_scope_of_always_is_shown(self, tui):
+        self._answer(tui, ["n"])
+        assert "/tmp/docs" in tui.console.file.getvalue()
+
+    def test_a_terminal_decision_does_not_offer_always(self, tui):
+        self._answer(tui, ["n"], make_decision(Surface.TERMINAL, Risk.DESTRUCTIVE))
+        output = tui.console.file.getvalue()
+        assert "stop asking" not in output
+        assert "keyboard" in output
+
+    def test_always_is_refused_on_a_terminal_decision(self, tui):
+        result = self._answer(tui, ["a", "y"], make_decision(Surface.TERMINAL))
+        assert result == (True, False)
 
     def test_live_display_is_suspended_and_restored(self, tui):
         events = []

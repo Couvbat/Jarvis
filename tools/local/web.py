@@ -180,6 +180,45 @@ class WebTools:
         return " ".join(line for line in lines if line)
 
 
+def _url_precheck(allow_private_network: bool):
+    """Refuse an unusable URL without doing any I/O.
+
+    Only the checks that need no network: the scheme, and a host that is
+    already an address literal. Resolving a name is left to the handler, so
+    policy evaluation stays fast and side-effect free.
+    """
+    def check(arguments: dict) -> Optional[str]:
+        raw = str(arguments.get("url") or "").strip()
+        if not raw:
+            return "url is required"
+        try:
+            parsed = urlparse(raw)
+        except ValueError as e:
+            return f"unusable URL: {e}"
+
+        if parsed.scheme.lower() not in ALLOWED_SCHEMES:
+            return (
+                f"unsupported URL scheme '{parsed.scheme}'; "
+                f"only {' and '.join(ALLOWED_SCHEMES)} are allowed"
+            )
+        if not parsed.hostname:
+            return "URL has no host"
+
+        if not allow_private_network:
+            try:
+                ipaddress.ip_address(parsed.hostname)
+            except ValueError:
+                return None  # a name; the handler resolves it
+            if _address_is_internal(parsed.hostname):
+                return (
+                    f"'{parsed.hostname}' is on the local network; set "
+                    f"ALLOW_PRIVATE_NETWORK_FETCH=true to permit this"
+                )
+        return None
+
+    return check
+
+
 def _domain_scope(arguments: dict) -> str:
     """Approvals for a fetch cover the site, not the individual page."""
     try:
@@ -212,5 +251,6 @@ def build_tools(
             risk=Risk.READ_ONLY,
             egress=True,
             scope_for=_domain_scope,
+            precheck=_url_precheck(allow_private_network),
         ),
     ]

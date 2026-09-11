@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     max_fetch_bytes: int = 2_000_000
     fetch_timeout: int = 10
     
+    # Persistent state
+    data_dir: str = "~/.local/share/jarvis"
+    
     # Logging
     log_level: str = "INFO"
     
@@ -68,6 +71,11 @@ class Settings(BaseSettings):
     def allowed_dirs_list(self) -> List[Path]:
         """Parse allowed directories into Path objects."""
         return [Path(d.strip()) for d in self.allowed_directories.split(',')]
+    
+    @property
+    def approvals_path(self) -> Path:
+        """Where standing approvals are kept."""
+        return Path(self.data_dir).expanduser() / "approvals.db"
     
     @property
     def gui_applications_list(self) -> List[str]:

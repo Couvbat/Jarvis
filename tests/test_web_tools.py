@@ -216,6 +216,23 @@ class TestToolSpec:
     def test_reads_nothing_locally(self):
         assert build_tools()[0].risk is Risk.READ_ONLY
 
+    def test_a_bad_scheme_is_refused_without_any_io(self):
+        """The precheck runs during policy evaluation, so it must not resolve
+        names or open sockets."""
+        precheck = build_tools()[0].precheck
+        assert "unsupported URL scheme" in precheck({"url": "file:///etc/passwd"})
+
+    def test_an_internal_ip_literal_is_refused_without_dns(self):
+        precheck = build_tools()[0].precheck
+        assert "local network" in precheck({"url": "http://127.0.0.1:11434/"})
+
+    def test_a_hostname_is_left_to_the_handler(self):
+        """Resolving a name needs I/O, so it is not a precheck concern."""
+        assert build_tools()[0].precheck({"url": "https://example.com"}) is None
+
+    def test_an_empty_url_is_refused_up_front(self):
+        assert build_tools()[0].precheck({"url": ""})
+
     def test_dispatch_through_the_registry(self, mocked_responses, public_dns):
         registry = ToolRegistry()
         registry.register_all(build_tools())

@@ -224,10 +224,40 @@ class TestToolSpec:
     def test_the_description_points_at_the_sandboxed_tools(self, on_path):
         assert "fs__" in build_tools(["ls"])[0].description
 
+    def test_an_unlisted_command_is_refused_up_front(self, on_path):
+        """Refused before the user is asked, not after they say yes."""
+        precheck = build_tools(["ls"])[0].precheck
+        assert "not in the command whitelist" in precheck({"application": "rm -rf /"})
+
+    def test_a_listed_command_passes_the_precheck(self, on_path):
+        assert build_tools(["ls"])[0].precheck({"application": "ls -la"}) is None
+
+    def test_an_unparseable_command_is_refused_up_front(self, on_path):
+        assert build_tools(["ls"])[0].precheck({"application": 'ls "unclosed'})
+
     def test_dispatch_through_the_registry(self, on_path, run_calls):
         registry = ToolRegistry()
         registry.register_all(build_tools(["ls"]))
         assert registry.call("app__launch", {"application": "ls"}).ok is True
+
+
+class TestApprovalScope:
+    def test_the_scope_is_the_whole_command_line(self, on_path):
+        scope_for = build_tools(["ls"])[0].scope_for
+        assert scope_for({"application": "ls", "args": ["-la", "/tmp"]}) == "ls -la /tmp"
+
+    def test_a_single_string_arg_is_handled(self, on_path):
+        scope_for = build_tools(["echo"])[0].scope_for
+        assert scope_for({"application": "echo", "args": "hello"}) == "echo hello"
+
+    def test_no_args_gives_the_bare_command(self, on_path):
+        assert build_tools(["ls"])[0].scope_for({"application": "ls"}) == "ls"
+
+    def test_different_arguments_are_different_scopes(self, on_path):
+        """Approving "ls -la" must not approve "rm -rf"."""
+        scope_for = build_tools(["ls"])[0].scope_for
+        assert scope_for({"application": "ls", "args": ["-la"]}) != \
+            scope_for({"application": "ls", "args": ["-l"]})
 
 
 class TestDefaults:

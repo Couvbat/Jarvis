@@ -87,6 +87,14 @@ class ToolSpec:
     #: believed: how much weight they carry is the policy engine's call.
     hints: Dict[str, Any] = field(default_factory=dict)
 
+    #: Cheap, deterministic reasons this call can never succeed - a path
+    #: outside the sandbox, a command that is not whitelisted. Returns the
+    #: reason, or None. The policy engine runs it before asking the user
+    #: anything: a confirmation prompt spends the user's attention, and
+    #: spending it on something that will be refused anyway trains them to
+    #: wave prompts through. Anything needing I/O belongs in the handler.
+    precheck: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None
+
     #: What an approval for a call should cover, derived from its arguments -
     #: a directory for a file write, a domain for a fetch. The tool knows this;
     #: the policy engine does not. Without one, approvals cover exactly the

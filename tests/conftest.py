@@ -111,52 +111,38 @@ def sandbox(tmp_path, settings):
 
 @pytest.fixture
 def approve_all():
-    """Confirmation callback that approves without whitelisting."""
+    """Confirmation stub that approves without remembering."""
     calls = []
 
-    def callback(action_description, item):
-        calls.append((action_description, item))
+    def confirm(decision):
+        calls.append(decision)
         return (True, False)
 
-    callback.calls = calls
-    return callback
+    confirm.calls = calls
+    return confirm
 
 
 @pytest.fixture
-def approve_and_whitelist():
-    """Confirmation callback that approves and asks for whitelisting."""
+def approve_and_remember():
+    """Confirmation stub that approves and asks to stop being asked."""
     calls = []
 
-    def callback(action_description, item):
-        calls.append((action_description, item))
+    def confirm(decision):
+        calls.append(decision)
         return (True, True)
 
-    callback.calls = calls
-    return callback
+    confirm.calls = calls
+    return confirm
 
 
 @pytest.fixture
 def deny_all():
-    """Confirmation callback that refuses every action."""
+    """Confirmation stub that refuses everything."""
     calls = []
 
-    def callback(action_description, item):
-        calls.append((action_description, item))
+    def confirm(decision):
+        calls.append(decision)
         return (False, False)
 
-    callback.calls = calls
-    return callback
-
-
-@pytest.fixture
-def executor(sandbox, approve_all, tmp_path, monkeypatch):
-    """An ActionExecutor sandboxed to ``sandbox`` with an isolated whitelist."""
-    from action_executor import ActionExecutor
-    import whitelist_manager
-
-    monkeypatch.chdir(tmp_path)
-    instance = ActionExecutor(confirmation_callback=approve_all)
-    instance.whitelist_manager = whitelist_manager.WhitelistManager(
-        str(tmp_path / "command_whitelist.json")
-    )
-    return instance
+    confirm.calls = calls
+    return confirm

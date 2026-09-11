@@ -218,10 +218,18 @@ Jarvis/
 ├── audio_handler.py       # Audio I/O and VAD
 ├── stt_module.py          # Speech-to-text (Whisper)
 ├── llm_module.py          # LLM integration (Ollama)
-├── action_executor.py     # System operations executor
 ├── tts_module.py          # Text-to-speech (Piper)
 ├── tui.py                 # Rich terminal interface
-├── whitelist_manager.py   # Persistent approval store
+├── tools/                 # Tool layer
+│   ├── schema.py          #   tool specs, risk levels, MCP conversion
+│   ├── registry.py        #   registration and dispatch
+│   ├── builtin.py         #   assembling the built-in tools
+│   └── local/             #   filesystem (CRUD), web, applications
+├── policy/                # What a tool call is allowed to do
+│   ├── paths.py           #   sandbox and denied patterns
+│   ├── engine.py          #   auto / confirm / refuse decisions
+│   ├── taint.py           #   untrusted-content tracking
+│   └── store.py           #   persistent approvals (SQLite)
 ├── setup_piper.py         # Piper installation script
 ├── tests/                 # Test suite (see tests/README.md)
 ├── requirements.txt       # Python dependencies
