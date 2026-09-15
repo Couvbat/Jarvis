@@ -57,13 +57,22 @@ class FakeLLM:
             return self.script.pop(0)
         return {"response": "ok", "tool_calls": None}
 
-    async def chat(self, message):
+    async def chat(self, message, on_text=None):
         self.chats.append(message)
-        return self._next()
+        return self._stream(self._next(), on_text)
 
-    async def continue_after_tools(self):
+    async def continue_after_tools(self, on_text=None):
         self.follow_ups += 1
-        return self._next()
+        return self._stream(self._next(), on_text)
+
+    @staticmethod
+    def _stream(result, on_text):
+        """Hand the text over in slices, as the real client does."""
+        text = result.get("response") or ""
+        if on_text and text:
+            for start in range(0, len(text), 5):
+                on_text(text[start:start + 5])
+        return result
 
     def add_tool_result(self, name, result, untrusted=False):
         self.tool_results.append((name, result))
@@ -128,11 +137,13 @@ def wiring(monkeypatch):
 
 
 @pytest.fixture
-def jarvis(wiring):
+async def jarvis(wiring):
     """A Jarvis that approves every confirmation, so tests can focus on flow."""
     instance = Jarvis(use_tui=False)
     instance._confirm = lambda decision: (True, False)
-    return instance
+    await instance.speech.start()
+    yield instance
+    await instance.speech.stop()
 
 
 class TestUtteranceNormalisation:

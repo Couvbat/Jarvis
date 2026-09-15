@@ -357,6 +357,61 @@ class TestToolResultFeedback:
         assert "Désolé." in wired._tts.spoken
 
 
+FAREWELLS = ("Goodbye!", "Au revoir!")
+
+
+def answer_only(spoken):
+    """What was said in the turn, without the closing farewell."""
+    return [piece for piece in spoken if piece not in FAREWELLS]
+
+
+class TestStreamingSpeech:
+    async def test_an_answer_is_spoken_sentence_by_sentence(self, wired, fake_ollama):
+        """Not one clip at the end: each sentence goes to the synthesiser as
+        soon as it is finished, which is what moves the first sound earlier."""
+        fake_ollama.responses.append(make_chat_response(
+            "Bonjour. J'ai trouvé ce que tu cherchais. Veux-tu autre chose ?"
+        ))
+        wired._stt.script = ["bonjour", "exit"]
+        await wired.run_interactive()
+
+        answer = answer_only(wired._tts.spoken)
+        assert len(answer) >= 3
+        assert answer[0] == "Bonjour."
+
+    async def test_nothing_is_lost_between_the_sentences(self, wired, fake_ollama):
+        text = "Bonjour. J'ai trouvé ce que tu cherchais. Veux-tu autre chose ?"
+        fake_ollama.responses.append(make_chat_response(text))
+        wired._stt.script = ["bonjour", "exit"]
+        await wired.run_interactive()
+
+        spoken = " ".join(answer_only(wired._tts.spoken))
+        assert spoken.replace(" ", "") == text.replace(" ", "")
+
+    async def test_speech_finishes_before_listening_again(self, wired, fake_ollama):
+        """Otherwise the microphone opens while Jarvis is still talking."""
+        fake_ollama.responses.extend([
+            make_chat_response("Une première réponse assez longue à dire."),
+            make_chat_response("Une seconde réponse."),
+        ])
+        wired._stt.script = ["un", "deux", "exit"]
+        await wired.run_interactive()
+        assert any("première" in text for text in wired._tts.spoken)
+        assert any("seconde" in text for text in wired._tts.spoken)
+
+    async def test_what_the_model_says_before_a_tool_is_spoken(self, wired, sandbox, fake_ollama):
+        """Filling the silence while a tool runs is the point, not a leak."""
+        fake_ollama.responses.extend([
+            make_chat_response("Je regarde ça tout de suite.", [file_tool_call(
+                "fs__write", path=str(sandbox / "a.txt"), content="x")]),
+            make_chat_response("C'est fait."),
+        ])
+        wired._stt.script = ["crée un fichier", "exit"]
+        await wired.run_interactive()
+        assert any("regarde" in text for text in wired._tts.spoken)
+        assert any("fait" in text for text in wired._tts.spoken)
+
+
 class TestLanguageFlow:
     async def test_switching_language_persists_across_turns(self, wired, fake_ollama):
         fake_ollama.responses.append(make_chat_response("Bonjour"))

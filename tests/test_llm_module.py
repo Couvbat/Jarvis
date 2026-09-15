@@ -248,6 +248,75 @@ class TestToolSelection:
         assert module._last_utterance == ""
 
 
+class TestStreaming:
+    """Speaking the first sentence before the rest is generated is what
+    separates an assistant from a batch job."""
+
+    async def test_fragments_arrive_as_they_are_generated(self, fake_ollama):
+        fragments = []
+        fake_ollama.responses.append(make_chat_response("Bonjour. Comment vas-tu ?"))
+        await LLMModule().chat("salut", on_text=fragments.append)
+        assert len(fragments) > 1
+        assert "".join(fragments) == "Bonjour. Comment vas-tu ?"
+
+    async def test_the_full_response_is_still_returned(self, fake_ollama):
+        fake_ollama.responses.append(make_chat_response("Bonjour tout le monde"))
+        result = await LLMModule().chat("salut", on_text=lambda f: None)
+        assert result["response"] == "Bonjour tout le monde"
+
+    async def test_streaming_is_requested(self, fake_ollama):
+        fake_ollama.responses.append(make_chat_response("ok"))
+        await LLMModule().chat("salut")
+        assert fake_ollama.calls[0]["stream"] is True
+
+    async def test_no_callback_is_fine(self, fake_ollama):
+        fake_ollama.responses.append(make_chat_response("ok"))
+        assert (await LLMModule().chat("salut"))["response"] == "ok"
+
+    async def test_tool_calls_survive_streaming(self, fake_ollama):
+        call = make_tool_call("fs__read", {"path": "/tmp/a"})
+        fake_ollama.responses.append(make_chat_response("Je regarde.", [call]))
+        result = await LLMModule().chat("lis le fichier", on_text=lambda f: None)
+        assert result["tool_calls"][0]["function"]["name"] == "fs__read"
+
+    async def test_prose_alongside_a_tool_call_is_still_streamed(self, fake_ollama):
+        """"I'll look that up" while the tool runs is the right thing to say."""
+        fragments = []
+        call = make_tool_call("fs__read", {"path": "/tmp/a"})
+        fake_ollama.responses.append(make_chat_response("Je regarde ça.", [call]))
+        await LLMModule().chat("lis le fichier", on_text=fragments.append)
+        assert "".join(fragments) == "Je regarde ça."
+
+    async def test_the_history_records_the_assembled_text(self, fake_ollama):
+        fake_ollama.responses.append(make_chat_response("Bonjour tout le monde"))
+        module = LLMModule()
+        await module.chat("salut")
+        assert module.history.get_messages()[-1]["content"] == "Bonjour tout le monde"
+
+    async def test_a_failure_mid_stream_is_converted_to_a_message(self, fake_ollama):
+        fake_ollama.error = ConnectionError("ollama went away")
+        result = await LLMModule().chat("salut", on_text=lambda f: None)
+        assert "error" in result["response"].lower()
+
+    async def test_the_error_message_is_streamed_too(self, fake_ollama):
+        """Otherwise a dead Ollama is a silent one: the caller speaks what it
+        is handed through on_text, and nothing else."""
+        fragments = []
+        fake_ollama.error = ConnectionError("ollama went away")
+        await LLMModule().chat("salut", on_text=fragments.append)
+        assert "error" in "".join(fragments).lower()
+
+    async def test_the_follow_up_streams_too(self, fake_ollama):
+        fragments = []
+        fake_ollama.responses.extend([
+            make_chat_response("un"), make_chat_response("Voici le résultat."),
+        ])
+        module = LLMModule()
+        await module.chat("salut")
+        await module.continue_after_tools(on_text=fragments.append)
+        assert "".join(fragments) == "Voici le résultat."
+
+
 class TestContextWindow:
     async def test_num_ctx_is_sent(self, fake_ollama, settings):
         """Ollama's context defaults to a few thousand tokens whatever the

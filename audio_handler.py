@@ -161,6 +161,13 @@ class AudioHandler:
             logger.error(f"Playback error: {e}")
             raise
     
+    def stop_playback(self):
+        """Cut playback immediately, for an interruption."""
+        try:
+            sd.stop()
+        except Exception as e:
+            logger.debug(f"Could not stop playback: {e}")
+
     def save_audio(self, audio_data: np.ndarray, filename: str):
         """Save audio data to file."""
         try:

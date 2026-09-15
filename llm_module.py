@@ -1,7 +1,7 @@
 """LLM module with Ollama integration and function calling."""
 
 from collections.abc import Mapping
-from typing import List, Dict, Any, Optional
+from typing import Any, Callable, Dict, List, Optional
 import ollama
 from loguru import logger
 from config import settings
@@ -146,12 +146,18 @@ speak English."""
         self.history = ConversationHistory(settings.max_conversation_history)
         self.history.set_system(self.SYSTEM_PROMPT)
 
-    async def chat(self, user_message: str) -> Dict[str, Any]:
+    async def chat(
+        self,
+        user_message: str,
+        on_text: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
         """
         Send a user message to the LLM and get its reply.
 
         Args:
             user_message: The user's message
+            on_text: Called with each fragment as it is generated, so speech
+                can start before the answer is finished
 
         Returns:
             Dict with 'response' (str) and 'tool_calls' (list or None)
@@ -159,9 +165,11 @@ speak English."""
         logger.info(f"User: {user_message}")
         self._last_utterance = user_message
         self.history.add_user(user_message)
-        return await self._generate()
+        return await self._generate(on_text)
 
-    async def continue_after_tools(self) -> Dict[str, Any]:
+    async def continue_after_tools(
+        self, on_text: Optional[Callable[[str], None]] = None
+    ) -> Dict[str, Any]:
         """
         Ask the model to carry on from the tool results already in history.
 
@@ -171,15 +179,24 @@ speak English."""
         written in.
         """
         logger.info("Continuing after tool results")
-        return await self._generate()
+        return await self._generate(on_text)
 
-    async def _generate(self) -> Dict[str, Any]:
-        """Run one model turn against the current history."""
+    async def _generate(
+        self, on_text: Optional[Callable[[str], None]] = None
+    ) -> Dict[str, Any]:
+        """Run one model turn against the current history.
+
+        Streamed, so a caller can start speaking the first sentence while the
+        rest is still being generated. That is the difference between an
+        assistant and a batch job: total time barely moves, but the wait
+        before the first sound roughly halves.
+        """
         try:
-            response = await self.client.chat(
+            stream = await self.client.chat(
                 model=self.model,
                 messages=self.history.get_messages(),
                 tools=self.available_tools(),
+                stream=True,
                 options={
                     "temperature": self.temperature,
                     "num_predict": self.max_tokens,
@@ -187,10 +204,26 @@ speak English."""
                 }
             )
 
-            message = response.get("message", {}) or {}
-            content = message.get("content", "") or ""
-            tool_calls = to_plain(message.get("tool_calls") or [])
+            parts: List[str] = []
+            tool_calls: List[Any] = []
 
+            async for chunk in stream:
+                message = chunk.get("message", {}) or {}
+
+                fragment = message.get("content") or ""
+                if fragment:
+                    parts.append(fragment)
+                    if on_text is not None:
+                        # Prose that arrives alongside a tool call is spoken
+                        # too: "I'll look that up" while the tool runs is the
+                        # right thing to say, not a leak.
+                        on_text(fragment)
+
+                calls = message.get("tool_calls")
+                if calls:
+                    tool_calls.extend(to_plain(calls))
+
+            content = "".join(parts)
             self.history.add_assistant(content, tool_calls)
 
             logger.info(f"Assistant: {content}")
@@ -206,6 +239,10 @@ speak English."""
             logger.error(f"LLM error: {e}")
             error_response = "I'm sorry, I encountered an error processing your request."
             self.history.add_assistant(error_response)
+            if on_text is not None:
+                # Down the same channel as any other text, so the caller has
+                # no special case and the user actually hears about it.
+                on_text(error_response)
             return {"response": error_response, "tool_calls": None}
 
     def available_tools(self) -> List[Dict[str, Any]]:

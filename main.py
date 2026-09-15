@@ -11,6 +11,8 @@ from policy.engine import PolicyEngine, Surface
 from policy.store import ApprovalStore
 from policy.taint import TaintState
 from tools.builtin import attach_mcp_tools, build_default_registry, build_mcp_manager
+from speech.chunker import SentenceChunker
+from speech.pipeline import SpeechPipeline
 from text_utils import normalise
 from tools.schema import ToolResult
 from tts_module import TTSModule
@@ -56,8 +58,9 @@ def is_exit_command(text: str) -> bool:
 class Jarvis:
     """Main voice assistant orchestrator."""
     
-    def __init__(self, use_tui: bool = False):
+    def __init__(self, use_tui: bool = False, speak_aloud: bool = True):
         self.use_tui = use_tui
+        self.speak_aloud = speak_aloud
         self.tui = None
         
         if self.use_tui:
@@ -77,6 +80,7 @@ class Jarvis:
         self.stt = STTModule()
         self.llm = LLMModule(self.registry)
         self.tts = TTSModule()
+        self.speech = SpeechPipeline(self.tts, self.audio, on_fallback=self._show)
         
         # Load models
         logger.info("Loading models (this may take a moment)...")
@@ -135,6 +139,9 @@ class Jarvis:
         started from __init__; and a server that will not come up must not
         stop the assistant from running without it.
         """
+        if self.speak_aloud:
+            await self.speech.start()
+
         try:
             await attach_mcp_tools(self.registry, self.mcp)
         except Exception as e:
@@ -145,28 +152,37 @@ class Jarvis:
                 self.tui.add_system_message(f"MCP {name}: {status}")
 
     async def aclose(self):
-        """Disconnect the MCP servers."""
+        """Shut down the speech pipeline and the MCP servers."""
+        try:
+            await self.speech.stop()
+        except Exception as e:  # pragma: no cover - reported by the pipeline
+            logger.error(f"Speech shutdown failed: {e}")
         try:
             await self.mcp.stop()
         except Exception as e:  # pragma: no cover - reported by the manager
             logger.error(f"MCP shutdown failed: {e}")
 
-    async def _speak(self, text: str):
-        """Say something out loud, falling back to the terminal if TTS fails."""
-        try:
-            # Piper is a subprocess and playback blocks; neither belongs on the
-            # event loop.
-            audio, sample_rate = await asyncio.to_thread(self.tts.synthesize, text)
-            if len(audio) > 0:
-                # The rate comes from the synthesiser: Piper's *-medium voices
-                # are 22050 Hz but *-low voices are 16000 Hz, and assuming one
-                # of them plays the other at the wrong speed.
-                await asyncio.to_thread(self.audio.play_audio, audio, sample_rate)
-                return
-        except Exception as e:
-            logger.error(f"TTS error: {e}")
-
+    def _show(self, text: str) -> None:
+        """Put text in front of the user when it cannot be spoken."""
         print(f"Jarvis: {text}")
+
+    def _emit(self, text: str) -> None:
+        """Send a finished sentence wherever this session puts them."""
+        if not text.strip():
+            return
+        if self.speak_aloud:
+            self.speech.say(text)
+        else:
+            print(text, end=" ", flush=True)
+
+    async def _speak(self, text: str) -> None:
+        """Say one fixed phrase and wait for it, e.g. a goodbye."""
+        self.speech.resume()
+        self._emit(text)
+        if self.speak_aloud:
+            await self.speech.drain()
+        else:
+            print()
 
     async def process_user_input(self, user_text: str) -> str:
         """
@@ -185,13 +201,31 @@ class Jarvis:
         # Taint is per turn: what the assistant read a minute ago should not
         # keep prompting for the rest of the session.
         self.taint.reset()
+        self.speech.resume()
 
-        result = await self.llm.chat(user_text)
+        chunker = SentenceChunker()
+
+        def on_text(fragment: str) -> None:
+            for sentence in chunker.feed(fragment):
+                self._emit(sentence)
+
+        def flush() -> None:
+            tail = chunker.flush()
+            if tail:
+                self._emit(tail)
+
+        result = await self.llm.chat(user_text, on_text=on_text)
+        flush()
 
         for _ in range(self.llm.MAX_TOOL_ITERATIONS):
             tool_calls = result["tool_calls"]
             if not tool_calls:
                 break
+
+            # Whatever the model said before asking for tools has been queued;
+            # let it finish so the user is not talked over by the next round.
+            if self.speak_aloud:
+                await self.speech.drain()
 
             logger.info(f"Executing {len(tool_calls)} tool call(s)")
             if self.use_tui:
@@ -206,15 +240,13 @@ class Jarvis:
             # No synthetic user turn here: the tool results are the new
             # information, and the follow-up may legitimately ask for more
             # tools, which is why this is a loop rather than one extra call.
-            result = await self.llm.continue_after_tools()
+            result = await self.llm.continue_after_tools(on_text=on_text)
+            flush()
         else:
             if result["tool_calls"]:
                 logger.warning(
                     f"Stopped after {self.llm.MAX_TOOL_ITERATIONS} tool rounds"
                 )
-
-        if self.use_tui:
-            self.tui.update_status("Speaking...")
 
         return result["response"]
 
@@ -267,6 +299,9 @@ class Jarvis:
 
     async def run_interactive(self):
         """Run in interactive voice mode."""
+        # The run method decides the mode, so an instance cannot be left
+        # configured to speak in a text session or stay mute in a voice one.
+        self.speak_aloud = True
         await self.start()
         if not self.use_tui:
             logger.info("\n" + "="*50)
@@ -400,10 +435,13 @@ class Jarvis:
                     
                 except Exception as e:
                     logger.error(f"Processing error: {e}")
-                    response_text = "I encountered an error processing your request."
+                    await self._speak("I encountered an error processing your request.")
                 
-                # Synthesize and speak response
-                await self._speak(response_text)
+                # The answer was spoken sentence by sentence as it arrived;
+                # wait for the tail before listening again.
+                if self.use_tui:
+                    self.tui.update_status("Speaking...")
+                await self.speech.drain()
                 
                 if self.use_tui:
                     self.tui.update_status("Ready")
@@ -420,6 +458,7 @@ class Jarvis:
     
     async def run_text_mode(self):
         """Run in text-only mode (no voice I/O)."""
+        self.speak_aloud = False
         await self.start()
         logger.info("\n" + "="*50)
         logger.info("Jarvis Voice Assistant - Text Mode")
@@ -445,8 +484,9 @@ class Jarvis:
                 
                 # Process
                 try:
-                    response_text = await self.process_user_input(user_text)
-                    print(f"\nJarvis: {response_text}")
+                    print("\nJarvis: ", end="", flush=True)
+                    await self.process_user_input(user_text)
+                    print()
                     
                 except Exception as e:
                     logger.error(f"Processing error: {e}")
