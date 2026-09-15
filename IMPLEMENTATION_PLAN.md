@@ -184,7 +184,39 @@ arguments.
 
 ---
 
-## Phase 2 — Passage en asynchrone et client MCP (≈ 5 jours)
+## Phase 2 — Passage en asynchrone et client MCP ✅ livrée
+
+771 tests passants, 14 `xfail`, 95 % de couverture. Vérifié par un vrai
+serveur MCP en sous-processus traversant toute la boucle.
+
+**Trois choses trouvées par les runs réels, pas par les tests unitaires :**
+
+1. Sous `trust: trusted`, les outils lecture seule demandaient quand même
+   confirmation. Écrire `"trust": "trusted"` dans la configuration *est*
+   l'approbation → `ToolSpec.preapproved`.
+2. Le premier appel MCP contaminait le tour, donc tous les suivants étaient
+   escaladés au clavier : un workflow multi-étapes devenait un mur d'invites.
+   La règle de taint demandait *si* le tour était sale, pas *où* le contenu
+   irait. Les résultats portent désormais une **origine**, et la sortie n'est
+   escaladée que vers une origine nouvelle pour ce tour.
+3. Un serveur bloqué au démarrage attendait les 5 s de grâce avant d'être
+   abandonné, retardant tous les suivants.
+
+**Écart assumé** : le plan prévoyait `sentence-transformers` pour la sélection
+d'outils. La sélection est lexicale, avec une table de synonymes FR↔EN — le
+rappel mesuré est de 100 % au `top_k` par défaut. Un backend d'embeddings
+multilingue coûte une pile d'apprentissage profond pour classer quarante
+chaînes courtes ; il doit s'adopter sur les chiffres de `tests/eval`, pas par
+principe. La table de synonymes a un plafond connu et il est documenté.
+
+**BUG-34** (nouveau, trouvé en Phase 2) : `OLLAMA_HOST` était lu dans les
+réglages puis jamais utilisé — le `ollama.chat()` de module construit son
+propre client depuis l'environnement du processus. Pointer `.env` vers une
+autre machine ne faisait rien. Corrigé par `AsyncClient(host=...)`.
+
+---
+
+## Phase 2 — détail (livrée)
 
 ### 2.1 — Passage du pipeline en asynchrone · 1,5 j
 
