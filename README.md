@@ -36,7 +36,8 @@ Audio Input → STT (Whisper) → LLM (Ollama) → Action Executor → TTS (Pipe
 ### 1. Clone the Repository
 
 ```bash
-cd /home/jules/Dev/other/Jarvis
+git clone <repository-url> Jarvis
+cd Jarvis
 ```
 
 ### 2. Install System Dependencies
@@ -217,10 +218,26 @@ Jarvis/
 ├── audio_handler.py       # Audio I/O and VAD
 ├── stt_module.py          # Speech-to-text (Whisper)
 ├── llm_module.py          # LLM integration (Ollama)
-├── action_executor.py     # System operations executor
 ├── tts_module.py          # Text-to-speech (Piper)
+├── tui.py                 # Rich terminal interface
+├── text_utils.py          # Shared normalisation and tokenisation
+├── tools/                 # Tool layer
+│   ├── schema.py          #   tool specs, risk levels, MCP conversion
+│   ├── registry.py        #   registration and dispatch
+│   ├── selection.py       #   which tools to offer this turn
+│   ├── builtin.py         #   assembling the built-in tools
+│   ├── local/             #   filesystem (CRUD), web, applications
+│   └── mcp/               #   MCP client: config, connections, adapter
+├── policy/                # What a tool call is allowed to do
+│   ├── paths.py           #   sandbox and denied patterns
+│   ├── engine.py          #   auto / confirm / refuse decisions
+│   ├── taint.py           #   untrusted-content tracking
+│   └── store.py           #   persistent approvals (SQLite)
 ├── setup_piper.py         # Piper installation script
+├── tests/                 # Test suite (see tests/README.md)
 ├── requirements.txt       # Python dependencies
+├── requirements-dev.txt   # Development dependencies
+├── requirements-test.txt  # Test-only dependencies (no native deps)
 ├── .env.example          # Example configuration
 ├── .env                  # Your configuration (create this)
 └── piper/                # Piper binary and models (created by setup)
@@ -380,6 +397,57 @@ def your_tool_name(self, param1: str) -> str:
     # ... your code ...
     return "Result"
 ```
+
+## Development
+
+### Running the tests
+
+```bash
+pip install -r requirements-test.txt   # no PortAudio, no models, no Ollama needed
+pytest
+pytest --cov --cov-report=term-missing
+ruff check .
+```
+
+The suite stubs every native and network dependency (`sounddevice`,
+`webrtcvad`, `faster-whisper`, `ollama`), so it runs on a bare machine in
+about a second. MCP tests drive a real server over the SDK's in-memory
+transport. See [tests/README.md](tests/README.md).
+
+### Connecting MCP servers
+
+Copy [mcp_servers.example.json](mcp_servers.example.json) to
+`mcp_servers.json`. The `mcpServers` object is the shape other MCP hosts use,
+so an existing configuration works unchanged; Jarvis adds `enabled` and
+`trust` (`confirm` by default, `trusted`, or `readonly`).
+
+A server's own annotations can only make one of its tools look *more*
+dangerous, never safer — they are written by the server. What relaxes a tool
+is the trust level you set.
+
+### Choosing a model
+
+Which local model calls tools well changes faster than any recommendation, and
+it depends on the machine. Measure it:
+
+```bash
+python tests/eval/run_tool_calling.py --model llama3.1:8b --compare
+```
+
+See [tests/eval/README.md](tests/eval/README.md).
+
+### Project status
+
+The goal is a fully local voice assistant — STT and TTS on-device — with tool
+calling, CRUD filesystem access, and MCP connections to external services.
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — the target design and the decisions behind it
+- [AUDIT.md](AUDIT.md) — what is implemented, what is not, and the known bugs
+- [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — the phased path to the target
+- [FEATURES_IDEA.md](FEATURES_IDEA.md) — longer-term feature ideas
+
+Known bugs are each pinned by an `xfail(strict=True)` test carrying their
+`BUG-xx` identifier. Run `pytest -rx` to list them.
 
 ## Contributing
 

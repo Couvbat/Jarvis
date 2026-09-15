@@ -1,14 +1,56 @@
 """Main orchestration loop for Jarvis voice assistant."""
 
+import asyncio
 import sys
 from loguru import logger
 from config import settings
 from audio_handler import AudioHandler
 from stt_module import STTModule
 from llm_module import LLMModule
-from action_executor import ActionExecutor
+from policy.engine import PolicyEngine, Surface
+from policy.store import ApprovalStore
+from policy.taint import TaintState
+from tools.builtin import attach_mcp_tools, build_default_registry, build_mcp_manager
+from text_utils import normalise
+from tools.schema import ToolResult
 from tts_module import TTSModule
 from tui import JarvisTUI
+
+
+#: Utterances that end the session. Matched against the whole normalised
+#: utterance, never as a substring: "stop" appears in plenty of requests that
+#: are not a request to quit.
+EXIT_COMMANDS = frozenset({
+    "exit", "quit", "stop", "goodbye", "good bye", "bye", "bye bye", "see you",
+    "au revoir", "arrete", "arrete toi", "a plus",
+})
+
+#: Trailing politeness that does not change the meaning of a command.
+_TRAILING_FILLER = ("s il te plait", "s il vous plait", "please", "now", "maintenant")
+
+#: Ways of addressing the assistant, at either end of a command.
+_ADDRESS = ("jarvis", "ok", "okay", "hey")
+
+
+#: Kept as a module-level name: the exit-command tests read it directly.
+normalise_utterance = normalise
+
+
+def is_exit_command(text: str) -> bool:
+    """True when the whole utterance is a request to stop."""
+    phrase = normalise_utterance(text)
+
+    for filler in _TRAILING_FILLER:
+        if phrase.endswith(f" {filler}"):
+            phrase = phrase[: -len(filler) - 1].strip()
+
+    for address in _ADDRESS:
+        if phrase.startswith(f"{address} "):
+            phrase = phrase[len(address) + 1:].strip()
+        if phrase.endswith(f" {address}"):
+            phrase = phrase[: -len(address) - 1].strip()
+
+    return phrase in EXIT_COMMANDS
 
 
 class Jarvis:
@@ -24,11 +66,16 @@ class Jarvis:
         
         logger.info("Initializing Jarvis...")
         
+        # Tools and the policy that gates them
+        self.registry = build_default_registry()
+        self.mcp = build_mcp_manager()
+        self.policy = PolicyEngine(ApprovalStore(settings.approvals_path))
+        self.taint = TaintState()
+
         # Initialize components
         self.audio = AudioHandler()
         self.stt = STTModule()
-        self.llm = LLMModule()
-        self.executor = ActionExecutor(confirmation_callback=self._confirmation_callback)
+        self.llm = LLMModule(self.registry)
         self.tts = TTSModule()
         
         # Load models
@@ -42,108 +89,185 @@ class Jarvis:
             self.tui.update_status("Ready")
             self.tui.update_language(settings.whisper_language)
     
-    def _confirmation_callback(self, action_description: str, item: str) -> tuple[bool, bool]:
-        """
-        Handle confirmation requests for actions.
-        
-        Args:
-            action_description: Description of the action
-            item: Item to potentially whitelist
-            
-        Returns:
-            Tuple of (execute_action, add_to_whitelist)
+    def _confirm(self, decision) -> tuple[bool, bool]:
+        """Ask the user about one call.
+
+        Returns (go ahead, remember this for next time).
+
+        Spoken confirmation is not implemented yet, so a VOICE decision is
+        asked at the keyboard too. The distinction is still enforced where it
+        matters: a TERMINAL decision never offers "always", because those are
+        the destructive and tainted calls that should be seen every time.
         """
         if self.use_tui and self.tui:
-            return self.tui.prompt_confirmation(action_description, item)
-        else:
-            # Simple text-based confirmation
-            print(f"\n[CONFIRMATION REQUIRED]")
-            print(f"Action: {action_description}")
-            print(f"Item: {item}")
-            print("\nOptions:")
-            print("  y - Execute this action")
-            print("  a - Execute and add to whitelist")
-            print("  n - Cancel this action")
-            
-            while True:
-                choice = input("\nYour choice (y/a/n): ").lower().strip()
-                
-                if choice == 'y':
-                    return (True, False)
-                elif choice == 'a':
-                    print(f"✓ Added to whitelist: {item}")
-                    return (True, True)
-                elif choice == 'n':
-                    print("✗ Action cancelled")
-                    return (False, False)
-                else:
-                    print("Invalid choice. Please enter y, a, or n.")
-    
-    def process_user_input(self, user_text: str) -> str:
+            return self.tui.prompt_confirmation(decision)
+
+        may_remember = decision.surface is not Surface.TERMINAL
+
+        print("\n[CONFIRMATION REQUIRED]")
+        if decision.surface is Surface.TERMINAL:
+            print("This one needs your keyboard, not your voice.")
+        print(f"Action: {decision.summary}")
+        print(f"Why ask: {decision.reason}")
+        print(f"Risk:   {decision.risk.name}")
+        print("\nOptions:")
+        print("  y - do it once")
+        if may_remember:
+            print(f"  a - do it and stop asking for {decision.scope}")
+        print("  n - don't")
+
+        choices = "y/a/n" if may_remember else "y/n"
+        while True:
+            choice = input(f"\nYour choice ({choices}): ").lower().strip()
+            if choice == "y":
+                return (True, False)
+            if choice == "a" and may_remember:
+                return (True, True)
+            if choice == "n":
+                print("Cancelled")
+                return (False, False)
+            print(f"Please answer {choices}.")
+
+    async def start(self):
+        """Bring up anything that needs the event loop.
+
+        MCP servers are subprocesses or network sessions, so they cannot be
+        started from __init__; and a server that will not come up must not
+        stop the assistant from running without it.
         """
-        Process user input through LLM and execute any tools.
-        
+        try:
+            await attach_mcp_tools(self.registry, self.mcp)
+        except Exception as e:
+            logger.error(f"MCP startup failed: {e}")
+
+        if self.use_tui and self.mcp.servers:
+            for name, status in self.mcp.statuses().items():
+                self.tui.add_system_message(f"MCP {name}: {status}")
+
+    async def aclose(self):
+        """Disconnect the MCP servers."""
+        try:
+            await self.mcp.stop()
+        except Exception as e:  # pragma: no cover - reported by the manager
+            logger.error(f"MCP shutdown failed: {e}")
+
+    async def _speak(self, text: str):
+        """Say something out loud, falling back to the terminal if TTS fails."""
+        try:
+            # Piper is a subprocess and playback blocks; neither belongs on the
+            # event loop.
+            audio, sample_rate = await asyncio.to_thread(self.tts.synthesize, text)
+            if len(audio) > 0:
+                # The rate comes from the synthesiser: Piper's *-medium voices
+                # are 22050 Hz but *-low voices are 16000 Hz, and assuming one
+                # of them plays the other at the wrong speed.
+                await asyncio.to_thread(self.audio.play_audio, audio, sample_rate)
+                return
+        except Exception as e:
+            logger.error(f"TTS error: {e}")
+
+        print(f"Jarvis: {text}")
+
+    async def process_user_input(self, user_text: str) -> str:
+        """
+        Process user input through the LLM, executing tools until it stops
+        asking for them.
+
         Args:
             user_text: User's transcribed text
-            
+
         Returns:
             Final response text
         """
-        # Get LLM response
         if self.use_tui:
             self.tui.update_status("Thinking...")
-        
-        result = self.llm.chat(user_text)
-        response_text = result["response"]
-        tool_calls = result["tool_calls"]
-        
-        # Execute any tool calls
-        if tool_calls:
+
+        # Taint is per turn: what the assistant read a minute ago should not
+        # keep prompting for the rest of the session.
+        self.taint.reset()
+
+        result = await self.llm.chat(user_text)
+
+        for _ in range(self.llm.MAX_TOOL_ITERATIONS):
+            tool_calls = result["tool_calls"]
+            if not tool_calls:
+                break
+
             logger.info(f"Executing {len(tool_calls)} tool call(s)")
-            
             if self.use_tui:
                 self.tui.update_status(f"Executing {len(tool_calls)} action(s)...")
-            
-            tool_results = []
+
             for tool_call in tool_calls:
-                # Log action to TUI
-                function_name = tool_call.get("function", {}).get("name", "unknown")
-                arguments = tool_call.get("function", {}).get("arguments", {})
-                
-                # Format action details for TUI
-                action_details = str(arguments)
-                if len(action_details) > 100:
-                    action_details = action_details[:100] + "..."
-                
-                if self.use_tui:
-                    self.tui.add_action(function_name, action_details, "info")
-                
-                # Execute tool
-                tool_result = self.executor.execute_tool_call(tool_call)
-                tool_results.append(tool_result)
-                
-                # Update action status
-                if self.use_tui:
-                    status = "success" if "Error" not in tool_result and "cancelled" not in tool_result else "error"
-                    self.tui.add_action(function_name, tool_result[:80], status)
-                
-                # Add result to conversation
-                self.llm.add_tool_result(function_name, tool_result)
-            
-            # Get final response from LLM after tool execution
+                await self._execute_tool_call(tool_call)
+
             if self.use_tui:
                 self.tui.update_status("Generating response...")
-            
-            follow_up = self.llm.chat("Please provide a natural response based on the tool results.")
-            response_text = follow_up["response"]
-        
+
+            # No synthetic user turn here: the tool results are the new
+            # information, and the follow-up may legitimately ask for more
+            # tools, which is why this is a loop rather than one extra call.
+            result = await self.llm.continue_after_tools()
+        else:
+            if result["tool_calls"]:
+                logger.warning(
+                    f"Stopped after {self.llm.MAX_TOOL_ITERATIONS} tool rounds"
+                )
+
         if self.use_tui:
             self.tui.update_status("Speaking...")
-        
-        return response_text
-    
-    def run_interactive(self):
+
+        return result["response"]
+
+    async def _execute_tool_call(self, tool_call: dict) -> ToolResult:
+        """Run one tool call, subject to policy, and record it everywhere."""
+        function = tool_call.get("function", {})
+        name = function.get("name", "unknown")
+        arguments = function.get("arguments") or {}
+
+        if self.use_tui:
+            details = str(arguments)
+            self.tui.add_action(name, details[:100], "info")
+
+        spec = self.registry.get(name)
+        if spec is None:
+            result = ToolResult.error(f"unknown tool '{name}'")
+        else:
+            decision = self.policy.evaluate(spec, arguments, self.taint)
+
+            if not decision.allowed:
+                # Refused outright: the user is never asked about a call that
+                # could not have run anyway.
+                logger.info(f"Refused {name}: {decision.reason}")
+                result = ToolResult.error(decision.reason)
+            elif decision.needs_confirmation:
+                # The prompt reads from stdin; keep it off the event loop so a
+                # pending confirmation cannot block everything else.
+                proceed, remember = await asyncio.to_thread(self._confirm, decision)
+                if not proceed:
+                    result = ToolResult.error("the user declined this action")
+                else:
+                    if remember:
+                        self.policy.remember(decision)
+                    result = await self.registry.call(name, arguments)
+            else:
+                logger.info(f"Auto-approved {name}: {decision.reason}")
+                result = await self.registry.call(name, arguments)
+
+        # Record before the model sees it: a result from outside the machine
+        # raises the bar for whatever it asks for next.
+        self.taint.observe(name, result)
+
+        if self.use_tui:
+            self.tui.add_action(
+                name, result.content[:80], "success" if result.ok else "error"
+            )
+
+        self.llm.add_tool_result(name, result.content, untrusted=result.untrusted)
+        return result
+
+    async def run_interactive(self):
         """Run in interactive voice mode."""
+        await self.start()
         if not self.use_tui:
             logger.info("\n" + "="*50)
             logger.info("Jarvis Voice Assistant - Interactive Mode")
@@ -163,9 +287,10 @@ class Jarvis:
                 
                 # Record audio
                 try:
-                    audio_data = self.audio.record_until_silence(
+                    audio_data = await asyncio.to_thread(
+                        self.audio.record_until_silence,
                         silence_threshold=1.5,
-                        max_duration=30.0
+                        max_duration=30.0,
                     )
                     
                     if len(audio_data) < 1000:  # Too short
@@ -189,7 +314,9 @@ class Jarvis:
                     self.tui.update_status("Transcribing...")
                 
                 try:
-                    user_text = self.stt.transcribe(audio_data, self.audio.sample_rate)
+                    user_text = await asyncio.to_thread(
+                        self.stt.transcribe, audio_data, self.audio.sample_rate
+                    )
                     
                     if not user_text or len(user_text.strip()) < 2:
                         logger.info("No speech detected, try again...")
@@ -222,12 +349,7 @@ class Jarvis:
                         self.tui.add_system_message("Language changed to French")
                         self.tui.update_status("Speaking...")
                     
-                    try:
-                        audio_response = self.tts.synthesize(response_text)
-                        self.audio.play_audio(audio_response, 22050)
-                    except Exception as e:
-                        logger.error(f"TTS error: {e}")
-                        print(f"Jarvis: {response_text}")
+                    await self._speak(response_text)
                     
                     if self.use_tui:
                         self.tui.update_status("Ready")
@@ -244,19 +366,14 @@ class Jarvis:
                         self.tui.add_system_message("Language changed to English")
                         self.tui.update_status("Speaking...")
                     
-                    try:
-                        audio_response = self.tts.synthesize(response_text)
-                        self.audio.play_audio(audio_response, 22050)
-                    except Exception as e:
-                        logger.error(f"TTS error: {e}")
-                        print(f"Jarvis: {response_text}")
+                    await self._speak(response_text)
                     
                     if self.use_tui:
                         self.tui.update_status("Ready")
                     continue
                 
                 # Check for exit commands
-                if any(cmd in lower_text for cmd in ["exit", "quit", "goodbye", "stop", "au revoir", "arrête"]):
+                if is_exit_command(user_text):
                     logger.info("Exit command detected")
                     response_text = "Goodbye!" if self.stt.language == "en" else "Au revoir!"
                     
@@ -265,18 +382,13 @@ class Jarvis:
                         self.tui.update_status("Shutting down...")
                     
                     # Speak goodbye
-                    try:
-                        audio_response = self.tts.synthesize(response_text)
-                        self.audio.play_audio(audio_response, 22050)
-                    except Exception as e:
-                        logger.error(f"TTS error: {e}")
-                        print(f"Jarvis: {response_text}")
+                    await self._speak(response_text)
                     
                     break
                 
                 # Process with LLM and tools
                 try:
-                    response_text = self.process_user_input(user_text)
+                    response_text = await self.process_user_input(user_text)
                     
                     if not response_text:
                         response_text = "I'm not sure how to respond to that."
@@ -291,19 +403,7 @@ class Jarvis:
                     response_text = "I encountered an error processing your request."
                 
                 # Synthesize and speak response
-                try:
-                    audio_response = self.tts.synthesize(response_text)
-                    
-                    if len(audio_response) > 0:
-                        self.audio.play_audio(audio_response, 22050)
-                    else:
-                        # Fallback to text if TTS fails
-                        print(f"Jarvis: {response_text}")
-                        
-                except Exception as e:
-                    logger.error(f"TTS error: {e}")
-                    # Fallback to text output
-                    print(f"Jarvis: {response_text}")
+                await self._speak(response_text)
                 
                 if self.use_tui:
                     self.tui.update_status("Ready")
@@ -314,11 +414,13 @@ class Jarvis:
             logger.error(f"Fatal error: {e}")
             raise
         finally:
+            await self.aclose()
             if self.use_tui:
                 self.tui.stop()
     
-    def run_text_mode(self):
+    async def run_text_mode(self):
         """Run in text-only mode (no voice I/O)."""
+        await self.start()
         logger.info("\n" + "="*50)
         logger.info("Jarvis Voice Assistant - Text Mode")
         logger.info("Type 'exit' to quit")
@@ -328,12 +430,12 @@ class Jarvis:
             while True:
                 # Get text input
                 try:
-                    user_text = input("\nYou: ").strip()
+                    user_text = (await asyncio.to_thread(input, "\nYou: ")).strip()
                     
                     if not user_text:
                         continue
                     
-                    if user_text.lower() in ["exit", "quit", "goodbye"]:
+                    if is_exit_command(user_text):
                         print("Jarvis: Goodbye!")
                         break
                     
@@ -343,7 +445,7 @@ class Jarvis:
                 
                 # Process
                 try:
-                    response_text = self.process_user_input(user_text)
+                    response_text = await self.process_user_input(user_text)
                     print(f"\nJarvis: {response_text}")
                     
                 except Exception as e:
@@ -353,6 +455,8 @@ class Jarvis:
         except Exception as e:
             logger.error(f"Fatal error: {e}")
             raise
+        finally:
+            await self.aclose()
 
 
 def main():
@@ -398,9 +502,9 @@ def main():
         jarvis = Jarvis(use_tui=use_tui)
         
         if mode == "voice":
-            jarvis.run_interactive()
+            asyncio.run(jarvis.run_interactive())
         else:
-            jarvis.run_text_mode()
+            asyncio.run(jarvis.run_text_mode())
             
     except Exception as e:
         logger.error(f"Failed to start Jarvis: {e}")

@@ -4,43 +4,90 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 import webrtcvad
-from collections import deque
-from typing import Optional, Generator
+from typing import Optional
 from loguru import logger
 from config import settings
 
 
+# webrtcvad only accepts frames of exactly 10, 20 or 30 ms of 16-bit mono PCM.
+# The capture block size is a separate concern (latency vs. syscall overhead),
+# so frames are carved out of whatever blocks the input stream delivers.
+VAD_FRAME_MS = 20
+VAD_SAMPLE_RATES = (8000, 16000, 32000, 48000)
+
+
 class AudioHandler:
     """Handles audio recording and playback with VAD support."""
-    
+
     def __init__(self):
         self.sample_rate = settings.sample_rate
         self.channels = settings.channels
         self.chunk_size = settings.chunk_size
         self.vad = webrtcvad.Vad(2)  # Aggressiveness 0-3, 2 is moderate
+        self.vad_frame_samples = self._vad_frame_samples()
+
+    def _vad_frame_samples(self) -> Optional[int]:
+        """Samples per VAD frame, or None when the rate rules the VAD out."""
+        if self.sample_rate not in VAD_SAMPLE_RATES:
+            logger.warning(
+                f"Sample rate {self.sample_rate} Hz is not supported by webrtcvad "
+                f"{VAD_SAMPLE_RATES}; silence detection is disabled and recordings "
+                f"will run to max_duration."
+            )
+            return None
+        return self.sample_rate * VAD_FRAME_MS // 1000
+
+    @staticmethod
+    def _to_mono(block: np.ndarray) -> np.ndarray:
+        """Downmix a (frames, channels) block to a flat mono waveform."""
+        if block.ndim == 1:
+            return block
+        if block.shape[1] == 1:
+            return block[:, 0]
+        # int32 intermediate so the average cannot overflow int16.
+        return block.astype(np.int32).mean(axis=1).astype(np.int16)
+
+    def _is_speech(self, frame: np.ndarray) -> bool:
+        """Run the VAD on one mono frame, disabling it if it ever rejects one."""
+        try:
+            return self.vad.is_speech(frame.tobytes(), self.sample_rate)
+        except Exception as e:
+            # Logged once, not per frame: a VAD that rejects one frame rejects
+            # them all, and silently swallowing it costs a full max_duration
+            # recording on every utterance.
+            logger.warning(f"VAD rejected a frame ({e}); silence detection disabled")
+            self.vad_frame_samples = None
+            return True
         
     def record_until_silence(
-        self, 
+        self,
         silence_threshold: float = 1.0,
-        max_duration: float = 30.0
+        max_duration: float = 30.0,
+        min_duration: float = 0.5,
     ) -> np.ndarray:
         """
-        Record audio until silence is detected.
-        
+        Record audio until the speaker falls silent.
+
         Args:
-            silence_threshold: Seconds of silence before stopping
-            max_duration: Maximum recording duration in seconds
-            
+            silence_threshold: Seconds of continuous silence before stopping
+            max_duration: Hard cap on the recording length in seconds
+            min_duration: Never stop on silence before this many seconds, so a
+                pause before the first word does not end the recording
+
         Returns:
-            Audio data as numpy array
+            Mono audio as a flat int16 numpy array
         """
         logger.info("Starting audio recording...")
-        
-        frames = []
-        silence_frames = 0
-        silence_frame_count = int(silence_threshold * self.sample_rate / self.chunk_size)
-        max_frames = int(max_duration * self.sample_rate / self.chunk_size)
-        
+
+        blocks = []
+        pending = np.empty(0, dtype=np.int16)  # mono samples not yet framed
+        silence_run = 0
+        recorded_samples = 0
+
+        silence_frames_needed = max(1, round(silence_threshold * 1000 / VAD_FRAME_MS))
+        min_samples = int(min_duration * self.sample_rate)
+        max_blocks = int(max_duration * self.sample_rate / self.chunk_size)
+
         try:
             with sd.InputStream(
                 samplerate=self.sample_rate,
@@ -49,45 +96,50 @@ class AudioHandler:
                 blocksize=self.chunk_size
             ) as stream:
                 logger.info("Listening... (speak now)")
-                
-                for _ in range(max_frames):
+
+                for _ in range(max_blocks):
                     audio_chunk, _ = stream.read(self.chunk_size)
-                    frames.append(audio_chunk.copy())
-                    
-                    # Check for voice activity
-                    # VAD requires 16-bit PCM, 8kHz, 16kHz, 32kHz, or 48kHz
-                    audio_bytes = audio_chunk.tobytes()
-                    
-                    try:
-                        is_speech = self.vad.is_speech(audio_bytes, self.sample_rate)
-                        
-                        if is_speech:
-                            silence_frames = 0
+                    blocks.append(audio_chunk.copy())
+                    recorded_samples += len(audio_chunk)
+
+                    frame_samples = self.vad_frame_samples
+                    if frame_samples is None:
+                        continue
+
+                    # Blocks are whatever size the stream delivers; the VAD gets
+                    # exact 20 ms mono frames carved out of the running buffer.
+                    pending = np.concatenate([pending, self._to_mono(audio_chunk)])
+                    while len(pending) >= frame_samples:
+                        frame = pending[:frame_samples]
+                        pending = pending[frame_samples:]
+
+                        if self._is_speech(frame):
+                            silence_run = 0
                         else:
-                            silence_frames += 1
-                            
-                        # Stop if we've had enough silence
-                        if silence_frames >= silence_frame_count and len(frames) > 10:
-                            logger.info("Silence detected, stopping recording")
-                            break
-                            
-                    except Exception as e:
-                        # VAD can fail with certain audio, continue anyway
-                        logger.debug(f"VAD error: {e}")
-                        
+                            silence_run += 1
+
+                        if self.vad_frame_samples is None:
+                            break  # _is_speech just switched the VAD off
+
+                    if (
+                        silence_run >= silence_frames_needed
+                        and recorded_samples >= min_samples
+                    ):
+                        logger.info("Silence detected, stopping recording")
+                        break
+
         except Exception as e:
             logger.error(f"Recording error: {e}")
             raise
-        
-        # Concatenate all frames
-        if not frames:
+
+        if not blocks:
             return np.array([], dtype=np.int16)
-            
-        audio_data = np.concatenate(frames, axis=0)
+
+        audio_data = self._to_mono(np.concatenate(blocks, axis=0))
         logger.info(f"Recording complete: {len(audio_data) / self.sample_rate:.2f}s")
-        
+
         return audio_data
-    
+
     def play_audio(self, audio_data: np.ndarray, sample_rate: Optional[int] = None):
         """
         Play audio data.

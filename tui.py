@@ -279,59 +279,73 @@ class JarvisTUI:
         self.actions_log = []
         self.refresh()
     
-    def prompt_confirmation(self, action_description: str, item: str) -> tuple[bool, bool]:
+    def prompt_confirmation(self, decision) -> tuple[bool, bool]:
         """
-        Prompt user for action confirmation.
-        
+        Ask the user about one tool call.
+
         Args:
-            action_description: Description of the action
-            item: Item to potentially whitelist
-            
+            decision: The policy engine's Decision, carrying the real
+                arguments, the risk and why the question is being asked
+
         Returns:
-            Tuple of (execute_action, add_to_whitelist)
+            Tuple of (go ahead, remember this for next time)
         """
+        may_remember = decision.surface.value != "terminal"
+
         if self.live:
             self.live.stop()
-        
+
         self.console.print()
+        heading = (
+            "[bold red]⚠️  Confirm at the keyboard[/bold red]"
+            if not may_remember
+            else "[bold yellow]⚠️  Confirmation required[/bold yellow]"
+        )
         self.console.print(Panel(
-            f"[bold yellow]⚠️  Confirmation Required[/bold yellow]\n\n"
-            f"Action: [cyan]{action_description}[/cyan]\n\n"
-            f"Do you want to proceed?",
-            border_style="yellow",
+            f"{heading}\n\n"
+            f"[cyan]{decision.summary}[/cyan]\n\n"
+            f"Risk: [bold]{decision.risk.name}[/bold]\n"
+            f"Why ask: {decision.reason}",
+            border_style="red" if not may_remember else "yellow",
             padding=(1, 2)
         ))
-        
+
         self.console.print("[cyan]Options:[/cyan]")
-        self.console.print("  [green]y[/green] - Execute this action")
-        self.console.print("  [green]a[/green] - Execute and [bold]add to whitelist[/bold]")
-        self.console.print("  [red]n[/red] - Cancel this action")
+        self.console.print("  [green]y[/green] - do it once")
+        if may_remember:
+            self.console.print(
+                f"  [green]a[/green] - do it and [bold]stop asking[/bold] "
+                f"for {decision.scope}"
+            )
+        self.console.print("  [red]n[/red] - don't")
         self.console.print()
-        
+
+        choices = "y/a/n" if may_remember else "y/n"
         while True:
-            choice = self.console.input("[bold]Your choice[/bold] [dim](y/a/n)[/dim]: ").lower().strip()
-            
+            choice = self.console.input(
+                f"[bold]Your choice[/bold] [dim]({choices})[/dim]: "
+            ).lower().strip()
+
             if choice == 'y':
                 result = (True, False)
                 break
-            elif choice == 'a':
+            if choice == 'a' and may_remember:
                 result = (True, True)
-                self.console.print(f"[green]✓[/green] Added to whitelist: {item}")
+                self.console.print(f"[green]✓[/green] Remembered for {decision.scope}")
                 break
-            elif choice == 'n':
+            if choice == 'n':
                 result = (False, False)
-                self.console.print("[red]✗[/red] Action cancelled")
+                self.console.print("[red]✗[/red] Cancelled")
                 break
-            else:
-                self.console.print("[red]Invalid choice. Please enter y, a, or n.[/red]")
-        
+            self.console.print(f"[red]Please answer {choices}.[/red]")
+
         self.console.print()
-        
+
         if self.live:
             self.live.start()
-        
+
         return result
-    
+
     def show_welcome(self):
         """Show welcome screen."""
         self.console.clear()

@@ -8,11 +8,16 @@ webrtcvad>=2.0.10
 faster-whisper>=0.10.0
 
 # LLM Integration
-ollama>=0.1.0
+# >=0.4 returns pydantic response models rather than dicts; the conversation
+# history normalises them, but older clients are not tested against.
+ollama>=0.4,<1.0
 requests>=2.31.0
 
 # Text-to-Speech (Piper will be installed separately)
 # Piper TTS - binary installation via script
+
+# MCP client (external services)
+mcp>=2.2,<3
 
 # System integration
 psutil>=5.9.0
