@@ -290,7 +290,28 @@ plutôt que sur une intuition.
 
 ---
 
-## Phase 3 — Latence, persistance, usage quotidien (≈ 4 jours)
+## Phase 3 — Latence, persistance, usage quotidien ✅ livrée
+
+953 tests passants, **0 `xfail`**, 96 % de couverture. Les 34 anomalies de
+l'audit sont closes.
+
+**Trouvé par les tests, pas par le raisonnement** : router la parole dans le
+streaming rendait un Ollama mort *silencieux* — le chemin d'erreur renvoyait
+son message sans jamais appeler `on_text`.
+
+**Limite assumée et documentée** : le barge-in est désactivé par défaut. Un
+micro dans la même pièce qu'un haut-parleur entend le haut-parleur ; sans
+annulation d'écho, Jarvis se coupe lui-même. Le mécanisme est complet et
+testé (plancher de bruit calibré sur l'écho, parole soutenue et
+ininterrompue, mots conservés pour le tour suivant) et fonctionne au casque.
+
+**Sommes de contrôle réelles** : les six empreintes SHA-256 de `setup_piper.py`
+ont été obtenues en téléchargeant et hachant les fichiers publiés. Livrer le
+mécanisme avec des valeurs fictives aurait été pire que de ne rien livrer.
+
+---
+
+## Phase 3 — détail (livrée)
 
 C'est la phase qui fait passer de « ça marche » à « je m'en sers tous les
 jours ».
