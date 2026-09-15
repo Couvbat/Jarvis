@@ -97,11 +97,6 @@ class Jarvis:
         #: Audio captured by an interruption, to start the next turn with.
         self._carried_audio = None
         
-        # Load models
-        logger.info("Loading models (this may take a moment)...")
-        self.stt.initialize()
-        self.tts.initialize()
-        
         logger.info("Jarvis initialized and ready!")
         
         if self.use_tui:
@@ -155,7 +150,15 @@ class Jarvis:
         stop the assistant from running without it.
         """
         if self.speak_aloud:
+            # Whisper and Piper are only needed by a session that listens and
+            # speaks. Text mode used to download and load both before its
+            # first prompt.
+            logger.info("Loading models (this may take a moment)...")
+            await asyncio.to_thread(self.stt.initialize)
+            await asyncio.to_thread(self.tts.initialize)
             await self.speech.start()
+
+        await self._check_llm()
 
         if self.resume:
             restored = self.llm.resume()
@@ -190,6 +193,29 @@ class Jarvis:
             await self.mcp.stop()
         except Exception as e:  # pragma: no cover - reported by the manager
             logger.error(f"MCP shutdown failed: {e}")
+
+    async def _check_llm(self) -> None:
+        """Say plainly when Ollama is not there, instead of once per turn."""
+        if await self.llm.is_available():
+            if await self.llm.has_model() is False:
+                message = (
+                    f"Ollama is running but '{settings.ollama_model}' is not "
+                    f"pulled. Run: ollama pull {settings.ollama_model}"
+                )
+                logger.warning(message)
+                if self.use_tui:
+                    self.tui.add_system_message(message)
+            return
+
+        message = (
+            f"Cannot reach Ollama at {settings.ollama_host}. "
+            f"Start it with: ollama serve"
+        )
+        logger.error(message)
+        if self.use_tui:
+            self.tui.add_system_message(message)
+        else:
+            print(message)
 
     def _show(self, text: str) -> None:
         """Put text in front of the user when it cannot be spoken."""
@@ -255,6 +281,34 @@ class Jarvis:
             await self.speech.drain()
         else:
             print()
+
+    async def handle_language_switch(self, user_text: str) -> bool:
+        """Switch language if that is what was asked. Returns whether it was.
+
+        Shared by both run modes: the voice loop had this inline, so a text
+        session could not change language at all.
+        """
+        phrase = normalise(user_text)
+
+        if any(cue in phrase for cue in ("switch to french", "parle francais",
+                                         "en francais", "in french")):
+            language, reply = "fr", "D'accord, je passe au français."
+        elif any(cue in phrase for cue in ("switch to english", "parle anglais",
+                                           "in english", "en anglais")):
+            language, reply = "en", "Okay, switching to English."
+        else:
+            return False
+
+        self.stt.set_language(language)
+        logger.info(f"Language switched to {language}")
+
+        if self.use_tui:
+            self.tui.update_language(language)
+            self.tui.add_assistant_message(reply)
+            self.tui.add_system_message(f"Language changed to {language}")
+
+        await self._speak(reply)
+        return True
 
     async def process_user_input(self, user_text: str) -> str:
         """
@@ -445,38 +499,7 @@ class Jarvis:
                         self.tui.update_status("Ready")
                     continue
                 
-                # Check for language switching commands
-                lower_text = user_text.lower()
-                if "switch to french" in lower_text or "parle français" in lower_text or "en français" in lower_text:
-                    self.stt.set_language("fr")
-                    response_text = "D'accord, je passe au français."
-                    logger.info("Language switched to French")
-                    
-                    if self.use_tui:
-                        self.tui.update_language("fr")
-                        self.tui.add_assistant_message(response_text)
-                        self.tui.add_system_message("Language changed to French")
-                        self.tui.update_status("Speaking...")
-                    
-                    await self._speak(response_text)
-                    
-                    if self.use_tui:
-                        self.tui.update_status("Ready")
-                    continue
-                
-                elif "switch to english" in lower_text or "parle anglais" in lower_text or "in english" in lower_text:
-                    self.stt.set_language("en")
-                    response_text = "Okay, switching to English."
-                    logger.info("Language switched to English")
-                    
-                    if self.use_tui:
-                        self.tui.update_language("en")
-                        self.tui.add_assistant_message(response_text)
-                        self.tui.add_system_message("Language changed to English")
-                        self.tui.update_status("Speaking...")
-                    
-                    await self._speak(response_text)
-                    
+                if await self.handle_language_switch(user_text):
                     if self.use_tui:
                         self.tui.update_status("Ready")
                     continue
@@ -552,6 +575,9 @@ class Jarvis:
                     if is_exit_command(user_text):
                         print("Jarvis: Goodbye!")
                         break
+
+                    if await self.handle_language_switch(user_text):
+                        continue
                     
                 except KeyboardInterrupt:
                     print("\n\nJarvis: Goodbye!")

@@ -104,6 +104,7 @@ class BargeInListener:
                 channels=self.audio.channels,
                 dtype="int16",
                 blocksize=frame_samples,
+                device=self.audio.input_device,
             ) as stream:
                 while not self._stop:
                     block, _ = stream.read(frame_samples)

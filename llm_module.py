@@ -1,5 +1,6 @@
 """LLM module with Ollama integration and function calling."""
 
+import asyncio
 from collections.abc import Mapping
 from typing import Any, Callable, Dict, List, Optional
 import ollama
@@ -8,6 +9,10 @@ from config import settings
 from conversation_store import ConversationStore
 from tools.registry import ToolRegistry
 from tools.selection import ToolSelector, estimate_schema_tokens
+
+
+#: Seconds to wait when asking the server whether it is there.
+HEALTH_TIMEOUT = 5.0
 
 
 def to_plain(value: Any) -> Any:
@@ -211,6 +216,41 @@ speak English."""
         )
         logger.info(f"Resumed {restored} turn(s) from conversation {source}")
         return restored
+
+    async def is_available(self) -> bool:
+        """Whether the Ollama server answers.
+
+        Without this a stopped server only shows up as a spoken apology once
+        per turn, which tells the user nothing about what to fix.
+        """
+        try:
+            await asyncio.wait_for(self.client.list(), timeout=HEALTH_TIMEOUT)
+            return True
+        except Exception as e:
+            logger.warning(f"Ollama at {self.host} is not answering: {e}")
+            return False
+
+    async def has_model(self) -> Optional[bool]:
+        """Whether the configured model is pulled. None if that cannot be told."""
+        try:
+            listing = await asyncio.wait_for(self.client.list(), timeout=HEALTH_TIMEOUT)
+        except Exception:
+            return None
+
+        models = listing.get("models") if hasattr(listing, "get") else None
+        if not models:
+            return None
+
+        wanted = self.model.split(":")[0]
+        for entry in models:
+            name = str(
+                (entry.get("model") if hasattr(entry, "get") else None)
+                or (entry.get("name") if hasattr(entry, "get") else None)
+                or ""
+            )
+            if name == self.model or name.split(":")[0] == wanted:
+                return True
+        return False
 
     def close(self) -> None:
         """Mark the conversation finished."""

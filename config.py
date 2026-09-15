@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     barge_in_min_speech_ms: int = 200
     sample_rate: int = 16000
     channels: int = 1
+    # Which microphone to use: a name, an index, or empty for the system
+    # default. `python -c "import sounddevice; print(sounddevice.query_devices())"`
+    # lists them.
+    audio_input_device: str = ""
     # 20 ms at 16 kHz. Silence is only re-checked once per captured block, so
     # smaller blocks make end-of-speech detection more responsive. The VAD
     # itself carves its own frames, so any value works.

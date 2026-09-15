@@ -231,14 +231,24 @@ class TestFileIO:
             )
 
 
-# --------------------------------------------------------------------------- #
-# Known gaps
-# --------------------------------------------------------------------------- #
+class TestInputDevice:
+    """A headless or multi-soundcard box needs to pin the capture device."""
 
-@pytest.mark.xfail(strict=True, reason="BUG-20: no input device selection")
-def test_input_device_can_be_configured(settings, fake_sd):
-    """A headless or multi-soundcard box needs to pin the capture device;
-    ``sd.InputStream`` is always opened on the system default."""
-    settings.audio_input_device = "USB Microphone"
-    AudioHandler().record_until_silence(max_duration=0.2)
-    assert FakeInputStream.instances[0].kwargs["device"] == "USB Microphone"
+    def test_a_device_name_is_used(self, settings, fake_sd):
+        settings.audio_input_device = "USB Microphone"
+        AudioHandler().record_until_silence(max_duration=0.2)
+        assert FakeInputStream.instances[0].kwargs["device"] == "USB Microphone"
+
+    def test_a_device_index_is_used(self, settings, fake_sd):
+        settings.audio_input_device = "3"
+        AudioHandler().record_until_silence(max_duration=0.2)
+        assert FakeInputStream.instances[0].kwargs["device"] == 3
+
+    def test_no_setting_means_the_system_default(self, settings, fake_sd):
+        settings.audio_input_device = ""
+        AudioHandler().record_until_silence(max_duration=0.2)
+        assert FakeInputStream.instances[0].kwargs["device"] is None
+
+    def test_whitespace_is_treated_as_unset(self, settings, fake_sd):
+        settings.audio_input_device = "   "
+        assert AudioHandler().input_device is None

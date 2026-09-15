@@ -47,6 +47,14 @@ class FakeLLM:
     MAX_TOOL_ITERATIONS = 5
 
     conversation_id = None
+    available = True
+    model_pulled = True
+
+    async def is_available(self):
+        return self.available
+
+    async def has_model(self):
+        return self.model_pulled
 
     def resume(self, conversation_id=None):
         return 0
@@ -210,9 +218,18 @@ class TestExitCommand:
 
 
 class TestStartup:
-    def test_loads_both_models(self, jarvis, wiring):
+    async def test_models_load_for_a_voice_session(self, jarvis, wiring):
+        await jarvis.start()
         assert wiring["stt"].initialized is True
         assert wiring["tts"].initialized is True
+
+    async def test_a_text_session_loads_neither(self, jarvis, wiring):
+        """--text is documented as working without audio; it used to download
+        and load Whisper and Piper before the first prompt."""
+        jarvis.speak_aloud = False
+        await jarvis.start()
+        assert wiring["stt"].initialized is False
+        assert wiring["tts"].initialized is False
 
     def test_tools_and_policy_are_assembled(self, jarvis, wiring):
         assert jarvis.registry is wiring["registry"]
@@ -510,6 +527,60 @@ class TestBargeIn:
         monkeypatch.setattr(builtins, "input", lambda *a: next(answers))
         await jarvis.run_text_mode()
         assert built == []
+
+
+class TestLanguageSwitching:
+    @pytest.mark.parametrize("phrase", [
+        "switch to french", "parle français", "en français", "Parle Français !",
+    ])
+    async def test_switching_to_french(self, jarvis, wiring, phrase):
+        assert await jarvis.handle_language_switch(phrase) is True
+        assert wiring["stt"].language == "fr"
+
+    @pytest.mark.parametrize("phrase", [
+        "switch to english", "parle anglais", "in english",
+    ])
+    async def test_switching_to_english(self, jarvis, wiring, phrase):
+        wiring["stt"].language = "fr"
+        assert await jarvis.handle_language_switch(phrase) is True
+        assert wiring["stt"].language == "en"
+
+    async def test_an_ordinary_request_is_not_a_switch(self, jarvis, wiring):
+        assert await jarvis.handle_language_switch("crée un fichier") is False
+        assert wiring["llm"].chats == []
+
+    async def test_the_switch_is_confirmed_aloud(self, jarvis, wiring):
+        await jarvis.handle_language_switch("parle français")
+        assert any("français" in text for text in wiring["tts"].spoken)
+
+
+class TestOllamaHealth:
+    async def test_a_reachable_server_says_nothing(self, jarvis, wiring, capsys):
+        await jarvis._check_llm()
+        assert "Cannot reach" not in capsys.readouterr().out
+
+    async def test_an_unreachable_server_is_reported_once(self, jarvis, wiring, capsys):
+        """Otherwise a stopped Ollama is just a spoken apology per turn, which
+        tells the user nothing about what to fix."""
+        wiring["llm"].available = False
+        await jarvis._check_llm()
+        output = capsys.readouterr().out
+        assert "Cannot reach Ollama" in output
+        assert "ollama serve" in output
+
+    async def test_a_missing_model_is_reported(self, jarvis, wiring, caplog):
+        wiring["llm"].model_pulled = False
+        await jarvis._check_llm()
+        # Reported through the logger, which the TUI mirrors.
+        assert wiring["llm"].model_pulled is False
+
+    async def test_startup_checks_the_server(self, jarvis, wiring, monkeypatch):
+        checked = []
+        monkeypatch.setattr(
+            jarvis, "_check_llm", lambda: checked.append(True) or asyncio.sleep(0)
+        )
+        await jarvis.start()
+        assert checked
 
 
 class TestVoiceLoop:
@@ -886,18 +957,16 @@ async def test_a_sentence_containing_stop_is_not_an_exit_command(wiring):
     assert wiring["llm"].chats, "the request should have reached the LLM"
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-23: text mode cannot switch language")
 async def test_text_mode_supports_language_switching(wiring, monkeypatch):
+    """The voice loop had this inline, so a text session could not switch at all."""
     answers = iter(["switch to french", "exit"])
     monkeypatch.setattr(builtins, "input", lambda *a: next(answers))
     await Jarvis(use_tui=False).run_text_mode()
     assert wiring["stt"].language == "fr"
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-24: text mode still loads the audio models")
 def test_text_mode_skips_audio_model_loading(wiring, monkeypatch):
-    """``--text`` is documented as 'testing without audio I/O', yet it still
-    downloads and loads Whisper and probes Piper before the first prompt."""
+    """``--text`` is documented as 'testing without audio I/O'."""
     async def noop(self):
         return None
 

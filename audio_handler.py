@@ -23,8 +23,17 @@ class AudioHandler:
         self.sample_rate = settings.sample_rate
         self.channels = settings.channels
         self.chunk_size = settings.chunk_size
+        self.input_device = self._resolve_device(settings.audio_input_device)
         self.vad = webrtcvad.Vad(2)  # Aggressiveness 0-3, 2 is moderate
         self.vad_frame_samples = self._vad_frame_samples()
+
+    @staticmethod
+    def _resolve_device(setting: str):
+        """A device name, an index, or None for the system default."""
+        value = (setting or "").strip()
+        if not value:
+            return None
+        return int(value) if value.isdigit() else value
 
     def _vad_frame_samples(self) -> Optional[int]:
         """Samples per VAD frame, or None when the rate rules the VAD out."""
@@ -97,7 +106,8 @@ class AudioHandler:
                 samplerate=self.sample_rate,
                 channels=self.channels,
                 dtype='int16',
-                blocksize=self.chunk_size
+                blocksize=self.chunk_size,
+                device=self.input_device,
             ) as stream:
                 logger.info("Listening... (speak now)")
 

@@ -34,9 +34,10 @@ class FakeSTT:
     def __init__(self):
         self.script = []
         self.language = "en"
+        self.initialized = False
 
     def initialize(self):
-        pass
+        self.initialized = True
 
     def set_language(self, language):
         self.language = language

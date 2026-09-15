@@ -526,7 +526,38 @@ async def test_reset_conversation_keeps_exactly_one_system_prompt(fake_ollama):
     assert len(module.history.get_messages()) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-10: no health check against the Ollama server")
-def test_module_exposes_a_health_check(fake_ollama):
-    """Without one, a stopped Ollama only surfaces as a spoken error per turn."""
-    assert LLMModule().is_available() in (True, False)
+class TestHealthCheck:
+    """Without one, a stopped Ollama only surfaces as a spoken apology per
+    turn, which tells the user nothing about what to fix."""
+
+    async def test_a_reachable_server_reports_available(self, fake_ollama):
+        assert await LLMModule().is_available() is True
+
+    async def test_an_unreachable_server_reports_unavailable(self, fake_ollama):
+        fake_ollama.list_error = ConnectionError("connection refused")
+        assert await LLMModule().is_available() is False
+
+    async def test_a_pulled_model_is_found(self, fake_ollama, settings):
+        settings.ollama_model = "llama3.1:8b"
+        fake_ollama.models = ["llama3.1:8b", "qwen3:8b"]
+        assert await LLMModule().has_model() is True
+
+    async def test_a_tag_difference_still_matches(self, fake_ollama, settings):
+        """"llama3.1" and "llama3.1:8b" are the same pull to a user."""
+        settings.ollama_model = "llama3.1:8b"
+        fake_ollama.models = ["llama3.1:latest"]
+        assert await LLMModule().has_model() is True
+
+    async def test_a_missing_model_is_reported(self, fake_ollama, settings):
+        settings.ollama_model = "llama3.1:8b"
+        fake_ollama.models = ["mistral:7b"]
+        assert await LLMModule().has_model() is False
+
+    async def test_an_unreachable_server_cannot_say(self, fake_ollama):
+        """None means "could not tell", which is not the same as "missing"."""
+        fake_ollama.list_error = ConnectionError("refused")
+        assert await LLMModule().has_model() is None
+
+    async def test_an_empty_listing_cannot_say(self, fake_ollama):
+        fake_ollama.models = []
+        assert await LLMModule().has_model() is None

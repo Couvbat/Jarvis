@@ -321,6 +321,14 @@ class _AsyncClient:
             return _AsyncStream(response)
         return response
 
+    async def list(self) -> Any:
+        module = _OLLAMA_MODULE["instance"]
+        if module.list_error is not None:
+            raise module.list_error
+        return SubscriptableModel(
+            models=[SubscriptableModel(model=name) for name in module.models]
+        )
+
 
 #: Lets _AsyncClient reach the module object that owns the scripted responses.
 _OLLAMA_MODULE: dict = {}
@@ -333,6 +341,8 @@ class _OllamaModule(types.ModuleType):
         self.responses: List[Any] = []
         self.hosts: List[Optional[str]] = []
         self.error: Optional[Exception] = None
+        self.list_error: Optional[Exception] = None
+        self.models: List[str] = ["llama3.1:8b"]
         self.AsyncClient = _AsyncClient
         _OLLAMA_MODULE["instance"] = self
 
@@ -358,6 +368,8 @@ class _OllamaModule(types.ModuleType):
         self.responses.clear()
         self.hosts.clear()
         self.error = None
+        self.list_error = None
+        self.models = ["llama3.1:8b"]
 
 
 # --------------------------------------------------------------------------- #

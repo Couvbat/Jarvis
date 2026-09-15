@@ -53,16 +53,10 @@ class TestTranscribe:
         with pytest.raises(RuntimeError, match="not initialized"):
             STTModule().transcribe(np.zeros(16000, dtype=np.int16))
 
-    def test_returns_every_segment_stripped_at_the_edges(self, module):
-        """Whisper segments carry a leading space, and the join adds another.
-
-        The words all make it through and the result is stripped, but the
-        interior spacing is doubled (see the xfail at the bottom of the file).
-        """
+    def test_returns_every_segment(self, module):
         FakeWhisperModel.scripted_text = "bonjour tout le monde"
         result = module.transcribe(np.zeros(16000, dtype=np.int16))
-        assert result.split() == ["bonjour", "tout", "le", "monde"]
-        assert not result.startswith(" ") and not result.endswith(" ")
+        assert result == "bonjour tout le monde"
 
     def test_int16_is_normalised_to_float32(self, module):
         audio = np.array([0, 16384, -16384, 32767], dtype=np.int16)
@@ -81,6 +75,16 @@ class TestTranscribe:
     def test_vad_filter_is_enabled(self, module):
         module.transcribe(np.zeros(16000, dtype=np.int16))
         assert FakeWhisperModel.instances[0].transcribe_calls[0]["vad_filter"] is True
+
+    @pytest.mark.parametrize("configured", ["auto", "AUTO", " auto ", ""])
+    def test_automatic_detection_is_passed_as_none(self, settings, configured):
+        """The README spells it "auto"; faster-whisper wants None, and the
+        literal string is not a valid code."""
+        settings.whisper_language = configured
+        module = STTModule()
+        module.initialize()
+        module.transcribe(np.zeros(16000, dtype=np.int16))
+        assert FakeWhisperModel.instances[0].transcribe_calls[0]["language"] is None
 
     def test_configured_language_is_forwarded(self, settings):
         settings.whisper_language = "fr"
@@ -116,6 +120,12 @@ class TestLanguageSwitching:
         module.set_language("fr")
         assert len(FakeWhisperModel.instances) == 1
 
+    def test_the_detected_language_is_recorded(self):
+        module = STTModule()
+        module.initialize()
+        module.transcribe(np.zeros(16000, dtype=np.int16))
+        assert module.detected_language == "en"
+
     def test_language_is_exposed_as_an_attribute(self):
         module = STTModule()
         module.set_language("en")
@@ -139,11 +149,6 @@ class TestTranscribeFile:
         )
 
 
-# --------------------------------------------------------------------------- #
-# Known gaps
-# --------------------------------------------------------------------------- #
-
-@pytest.mark.xfail(strict=True, reason="BUG-12: WHISPER_LANGUAGE=auto is not translated")
 def test_auto_language_is_translated_to_none(settings):
     """The README documents ``auto`` for language auto-detection.
 
@@ -157,7 +162,6 @@ def test_auto_language_is_translated_to_none(settings):
     assert FakeWhisperModel.instances[0].transcribe_calls[0]["language"] is None
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-14: segments are joined with a double space")
 def test_segments_are_joined_with_single_spaces():
     """faster-whisper segments already start with a space; ``" ".join`` doubles it.
 
@@ -169,7 +173,6 @@ def test_segments_are_joined_with_single_spaces():
     assert module.transcribe(np.zeros(16000, dtype=np.int16)) == "bonjour tout le monde"
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-13: detected language is not surfaced")
 def test_detected_language_is_reported_to_the_caller():
     """``info.language`` is logged and dropped, so nothing can act on a
     mid-conversation language switch by the speaker."""
