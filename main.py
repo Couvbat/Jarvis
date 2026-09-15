@@ -1,10 +1,12 @@
 """Main orchestration loop for Jarvis voice assistant."""
 
+import argparse
 import asyncio
 import sys
 from loguru import logger
 from config import settings
 from audio_handler import AudioHandler
+from conversation_store import ConversationStore
 from stt_module import STTModule
 from llm_module import LLMModule
 from policy.engine import PolicyEngine, Surface
@@ -59,9 +61,15 @@ def is_exit_command(text: str) -> bool:
 class Jarvis:
     """Main voice assistant orchestrator."""
     
-    def __init__(self, use_tui: bool = False, speak_aloud: bool = True):
+    def __init__(
+        self,
+        use_tui: bool = False,
+        speak_aloud: bool = True,
+        resume: bool = False,
+    ):
         self.use_tui = use_tui
         self.speak_aloud = speak_aloud
+        self.resume = resume
         self.tui = None
         
         if self.use_tui:
@@ -79,7 +87,11 @@ class Jarvis:
         # Initialize components
         self.audio = AudioHandler()
         self.stt = STTModule()
-        self.llm = LLMModule(self.registry)
+        self.conversations = (
+            ConversationStore(settings.conversations_path)
+            if settings.conversation_history else None
+        )
+        self.llm = LLMModule(self.registry, store=self.conversations)
         self.tts = TTSModule()
         self.speech = SpeechPipeline(self.tts, self.audio, on_fallback=self._show)
         #: Audio captured by an interruption, to start the next turn with.
@@ -145,6 +157,16 @@ class Jarvis:
         if self.speak_aloud:
             await self.speech.start()
 
+        if self.resume:
+            restored = self.llm.resume()
+            message = (
+                f"Resumed {restored} turn(s) from the last conversation"
+                if restored else "No earlier conversation to resume"
+            )
+            logger.info(message)
+            if self.use_tui:
+                self.tui.add_system_message(message)
+
         try:
             await attach_mcp_tools(self.registry, self.mcp)
         except Exception as e:
@@ -155,7 +177,11 @@ class Jarvis:
                 self.tui.add_system_message(f"MCP {name}: {status}")
 
     async def aclose(self):
-        """Shut down the speech pipeline and the MCP servers."""
+        """Shut down the speech pipeline, the MCP servers and the log."""
+        try:
+            self.llm.close()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.error(f"Could not close the conversation log: {e}")
         try:
             await self.speech.stop()
         except Exception as e:  # pragma: no cover - reported by the pipeline
@@ -548,53 +574,65 @@ class Jarvis:
             await self.aclose()
 
 
-def main():
-    """Main entry point."""
-    # Check command line arguments
-    mode = "voice"
-    use_tui = False
-    
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "--text":
-            mode = "text"
-        elif sys.argv[1] == "--tui":
-            mode = "voice"
-            use_tui = True
-        elif sys.argv[1] == "--help":
-            print("Jarvis Voice Assistant")
-            print("\nUsage:")
-            print("  python main.py          # Voice mode (default)")
-            print("  python main.py --tui    # Voice mode with Terminal UI")
-            print("  python main.py --text   # Text-only mode")
-            print("  python main.py --help   # Show this help")
-            return
-    
-    # Configure logging
-    logger.remove()  # Remove default handler
-    
-    # If using TUI, only log to file to avoid interfering with the UI
+def parse_arguments(argv=None):
+    """Read the command line.
+
+    argparse rather than a hand-rolled chain, so an unknown flag is an error
+    instead of being ignored: "--txt" used to start a voice session with the
+    microphone open, which is not what the user asked for.
+    """
+    parser = argparse.ArgumentParser(
+        prog="jarvis",
+        description="A local voice assistant.",
+    )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--text", action="store_true",
+        help="text-only mode, with no audio input or output",
+    )
+    mode.add_argument(
+        "--tui", action="store_true",
+        help="voice mode with the terminal interface",
+    )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="carry on from where the last conversation left off",
+    )
+    return parser.parse_args(argv)
+
+
+def configure_logging(use_tui: bool) -> None:
+    """Send logs somewhere that will not fight with the interface."""
+    logger.remove()
     if use_tui:
+        # The TUI owns the terminal; logs go to a file or they corrupt it.
         logger.add(
             "jarvis.log",
             format="{time:HH:mm:ss} | {level: <8} | {message}",
-            level=settings.log_level
+            level=settings.log_level,
         )
     else:
         logger.add(
             sys.stderr,
-            format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
-            level=settings.log_level
+            format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> "
+                   "| <level>{message}</level>",
+            level=settings.log_level,
         )
-    
-    # Create and run assistant
+
+
+def main():
+    """Main entry point."""
+    arguments = parse_arguments()
+    configure_logging(arguments.tui)
+
     try:
-        jarvis = Jarvis(use_tui=use_tui)
-        
-        if mode == "voice":
-            asyncio.run(jarvis.run_interactive())
-        else:
+        jarvis = Jarvis(use_tui=arguments.tui, resume=arguments.resume)
+
+        if arguments.text:
             asyncio.run(jarvis.run_text_mode())
-            
+        else:
+            asyncio.run(jarvis.run_interactive())
+
     except Exception as e:
         logger.error(f"Failed to start Jarvis: {e}")
         sys.exit(1)

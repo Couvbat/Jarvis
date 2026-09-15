@@ -57,6 +57,21 @@ def reset_stubs():
         module.reset()
 
 
+@pytest.fixture(autouse=True)
+def isolated_state(tmp_path_factory, monkeypatch):
+    """Keep every test away from the user's real approvals and conversations.
+
+    DATA_DIR decides where those databases live, and a test that forgets to
+    stub a store would otherwise write into the developer's own state.
+    """
+    from config import settings as _settings
+
+    directory = tmp_path_factory.mktemp("jarvis-state")
+    monkeypatch.setenv("DATA_DIR", str(directory))
+    monkeypatch.setattr(_settings, "data_dir", str(directory), raising=False)
+    return directory
+
+
 @pytest.fixture
 def clean_env(monkeypatch):
     """Remove every Jarvis env var so ``Settings()`` shows its declared defaults."""

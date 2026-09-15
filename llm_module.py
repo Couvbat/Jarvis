@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, Optional
 import ollama
 from loguru import logger
 from config import settings
+from conversation_store import ConversationStore
 from tools.registry import ToolRegistry
 from tools.selection import ToolSelector, estimate_schema_tokens
 
@@ -32,10 +33,18 @@ class ConversationHistory:
     clearing cannot drop it, duplicate it, or count it against the limit.
     """
 
-    def __init__(self, max_history: int = 10):
+    def __init__(
+        self,
+        max_history: int = 10,
+        on_turn: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ):
         self.max_history = max(0, max_history)
         self.system_message: Optional[Dict[str, Any]] = None
         self.turns: List[Dict[str, Any]] = []
+        #: Called with each turn as it is appended. Trimming drops turns from
+        #: memory to stay inside the context window; whoever is listening keeps
+        #: the record, so the two must not be the same thing.
+        self.on_turn = on_turn
 
     def set_system(self, content: str):
         """Set (or replace) the system prompt."""
@@ -50,6 +59,14 @@ class ConversationHistory:
         message: Dict[str, Any] = {"role": role, "content": content}
         message.update({key: value for key, value in fields.items() if value})
         self.turns.append(message)
+
+        if self.on_turn is not None:
+            try:
+                self.on_turn(dict(message))
+            except Exception as e:
+                # A failing recorder must not cost the conversation.
+                logger.error(f"Could not record a turn: {e}")
+
         self._trim()
 
     def add_user(self, content: str):
@@ -95,6 +112,23 @@ class ConversationHistory:
         messages = [self.system_message] if self.system_message else []
         return messages + self.turns
 
+    def restore(self, messages: List[Dict[str, Any]]) -> int:
+        """Load turns from an earlier session without re-recording them."""
+        listener, self.on_turn = self.on_turn, None
+        try:
+            for message in messages:
+                role = message.get("role")
+                if role in (None, "system"):
+                    continue
+                fields = {
+                    key: value for key, value in message.items()
+                    if key not in ("role", "content")
+                }
+                self.add_message(role, str(message.get("content") or ""), **fields)
+        finally:
+            self.on_turn = listener
+        return len(self.turns)
+
     def clear(self):
         """Drop every turn, keeping the system prompt."""
         self.turns = []
@@ -128,8 +162,11 @@ speak English."""
         self,
         registry: Optional[ToolRegistry] = None,
         selector: Optional[ToolSelector] = None,
+        store: Optional[ConversationStore] = None,
     ):
         self.registry = registry
+        self.store = store
+        self.conversation_id: Optional[int] = None
         self.selector = selector if selector is not None else ToolSelector(
             threshold=settings.tool_selection_threshold,
             top_k=settings.tool_selection_top_k,
@@ -143,8 +180,42 @@ speak English."""
         self.model = settings.ollama_model
         self.temperature = settings.llm_temperature
         self.max_tokens = settings.llm_max_tokens
-        self.history = ConversationHistory(settings.max_conversation_history)
+        if self.store is not None:
+            self.conversation_id = self.store.start()
+
+        self.history = ConversationHistory(
+            settings.max_conversation_history, on_turn=self._record
+        )
         self.history.set_system(self.SYSTEM_PROMPT)
+
+    def _record(self, message: Dict[str, Any]) -> None:
+        """Write a turn to the conversation log, if one is being kept."""
+        if self.store is not None and self.conversation_id is not None:
+            self.store.append(self.conversation_id, message)
+
+    def resume(self, conversation_id: Optional[int] = None) -> int:
+        """Carry an earlier conversation's turns into this session.
+
+        Only the most recent turns come back: the end of a conversation is the
+        part still worth having, and the rest would not fit the context anyway.
+        """
+        if self.store is None:
+            return 0
+
+        source = conversation_id if conversation_id is not None else self.store.last_id()
+        if source is None or source == self.conversation_id:
+            return 0
+
+        restored = self.history.restore(
+            self.store.messages(source, limit=settings.max_conversation_history)
+        )
+        logger.info(f"Resumed {restored} turn(s) from conversation {source}")
+        return restored
+
+    def close(self) -> None:
+        """Mark the conversation finished."""
+        if self.store is not None and self.conversation_id is not None:
+            self.store.end(self.conversation_id)
 
     async def chat(
         self,
@@ -283,8 +354,15 @@ speak English."""
         self.history.add_tool_result(tool_name, result, untrusted=untrusted)
 
     def reset_conversation(self):
-        """Reset conversation history, keeping the system prompt."""
+        """Reset conversation history, keeping the system prompt.
+
+        The log is not rewound: what was said was said, and a new conversation
+        is opened rather than the old one overwritten.
+        """
         self.history.clear()
         self.selector.reset()
         self._last_utterance = ""
+        if self.store is not None:
+            self.close()
+            self.conversation_id = self.store.start()
         logger.info("Conversation history reset")

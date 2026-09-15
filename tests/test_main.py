@@ -46,6 +46,14 @@ class FakeSTT:
 class FakeLLM:
     MAX_TOOL_ITERATIONS = 5
 
+    conversation_id = None
+
+    def resume(self, conversation_id=None):
+        return 0
+
+    def close(self):
+        pass
+
     def __init__(self, script=None):
         self.script = list(script or [])
         self.chats = []          # user messages passed to chat()
@@ -130,7 +138,9 @@ def wiring(monkeypatch):
     }
     monkeypatch.setattr(main_module, "AudioHandler", lambda: parts["audio"])
     monkeypatch.setattr(main_module, "STTModule", lambda: parts["stt"])
-    monkeypatch.setattr(main_module, "LLMModule", lambda registry=None: parts["llm"])
+    monkeypatch.setattr(
+        main_module, "LLMModule", lambda *args, **kwargs: parts["llm"]
+    )
     monkeypatch.setattr(main_module, "TTSModule", lambda: parts["tts"])
     monkeypatch.setattr(main_module, "build_default_registry", lambda: registry)
     monkeypatch.setattr(main_module, "ApprovalStore", lambda path: ApprovalStore(":memory:"))
@@ -647,11 +657,38 @@ class TestEntryPoint:
         """``main()`` configures a file logger; keep jarvis.log out of the repo."""
         monkeypatch.chdir(tmp_path)
 
+    def test_argument_parsing(self):
+        arguments = main_module.parse_arguments(["--text", "--resume"])
+        assert arguments.text is True
+        assert arguments.resume is True
+        assert arguments.tui is False
+
+    def test_text_and_tui_are_mutually_exclusive(self):
+        with pytest.raises(SystemExit):
+            main_module.parse_arguments(["--text", "--tui"])
+
+    def test_no_arguments_means_voice(self):
+        arguments = main_module.parse_arguments([])
+        assert arguments.text is False and arguments.tui is False
+
+    def test_resume_is_passed_through(self, wiring, monkeypatch):
+        monkeypatch.setattr(main_module.sys, "argv", ["main.py", "--text", "--resume"])
+        captured = {}
+
+        async def text(self):
+            captured["resume"] = self.resume
+
+        monkeypatch.setattr(Jarvis, "run_text_mode", text)
+        main_module.main()
+        assert captured["resume"] is True
+
     def test_help_prints_usage(self, monkeypatch, capsys):
         monkeypatch.setattr(main_module.sys, "argv", ["main.py", "--help"])
-        main_module.main()
+        with pytest.raises(SystemExit) as exit_info:
+            main_module.main()
+        assert exit_info.value.code == 0
         output = capsys.readouterr().out
-        assert "--text" in output and "--tui" in output
+        assert "--text" in output and "--tui" in output and "--resume" in output
 
     def test_default_is_voice_mode(self, wiring, monkeypatch):
         monkeypatch.setattr(main_module.sys, "argv", ["main.py"])
@@ -870,8 +907,8 @@ def test_text_mode_skips_audio_model_loading(wiring, monkeypatch):
     assert wiring["stt"].initialized is False
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-25: unknown CLI flags are silently ignored")
 def test_unknown_flag_is_reported(wiring, monkeypatch, capsys):
+    """"--txt" used to start a voice session with the microphone open."""
     async def noop(self):
         return None
 

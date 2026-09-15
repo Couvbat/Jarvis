@@ -81,6 +81,8 @@ class Settings(BaseSettings):
     
     # Persistent state
     data_dir: str = "~/.local/share/jarvis"
+    # Conversations are written to disk in the clear, on this machine.
+    conversation_history: bool = True
     
     # Logging
     log_level: str = "INFO"
@@ -94,6 +96,11 @@ class Settings(BaseSettings):
     def approvals_path(self) -> Path:
         """Where standing approvals are kept."""
         return Path(self.data_dir).expanduser() / "approvals.db"
+    
+    @property
+    def conversations_path(self) -> Path:
+        """Where conversation history is kept."""
+        return Path(self.data_dir).expanduser() / "conversations.db"
     
     @property
     def gui_applications_list(self) -> List[str]:
