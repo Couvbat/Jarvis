@@ -33,8 +33,8 @@ def render(renderable, width=120) -> str:
 
 class TestState:
     def test_starts_empty(self, tui):
-        assert tui.chat_history == []
-        assert tui.actions_log == []
+        assert list(tui.chat_history) == []
+        assert list(tui.actions_log) == []
 
     def test_add_user_message(self, tui):
         tui.add_user_message("bonjour")
@@ -66,12 +66,12 @@ class TestState:
     def test_clear_history(self, tui):
         tui.add_user_message("one")
         tui.clear_history()
-        assert tui.chat_history == []
+        assert list(tui.chat_history) == []
 
     def test_clear_actions(self, tui):
         tui.add_action("a", "b")
         tui.clear_actions()
-        assert tui.actions_log == []
+        assert list(tui.actions_log) == []
 
     def test_update_status(self, tui):
         tui.update_status("Listening...")
@@ -233,36 +233,63 @@ class TestLifecycle:
 # Known gaps
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.xfail(strict=True, reason="BUG-28: TUI panels grow without bound")
 def test_history_is_capped_in_memory(tui):
-    """Only the last 10 messages are *rendered*, but every message is kept.
-
-    A long-running session accumulates the whole transcript in RAM with no
-    trimming and no way to persist or page through it.
-    """
+    """A long session would otherwise hold the whole transcript, and only the
+    last handful is ever rendered. The record lives in SQLite now."""
     for _ in range(5000):
         tui.add_user_message("x" * 200)
     assert len(tui.chat_history) <= 1000
 
 
-@pytest.mark.xfail(
-    strict=True, reason="BUG-29: the newest messages are clipped out of the chat panel"
-)
-def test_chat_panel_always_shows_the_latest_message(tui):
-    """The panel selects the last 10 messages but is pinned to ``height=20``.
-
-    Each message renders as two lines (text + spacer) plus padding, so only
-    eight fit: the two most recent turns - usually Jarvis's actual answer -
-    are cut off the bottom of the panel.
-    """
-    for index in range(15):
-        tui.add_user_message(f"message{index:02d}")
-    assert "message14" in render(tui._make_chat_panel())
+def test_the_actions_log_is_capped_too(tui):
+    for index in range(5000):
+        tui.add_action("op", str(index))
+    assert len(tui.actions_log) <= 1000
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-30: panel heights do not adapt")
-def test_panels_adapt_to_small_terminals(tui):
-    """``height=20`` on the chat panel and ``height=12`` on the actions panel
-    overflow a terminal shorter than ~40 rows."""
-    output = render(tui._make_chat_panel(), width=80)
-    assert len(output.splitlines()) < 20
+class TestPanelFitting:
+    """The newest message is the one the user is waiting for."""
+
+    def test_the_latest_message_is_always_shown(self, tui):
+        for index in range(15):
+            tui.add_user_message(f"message{index:02d}")
+        assert "message14" in render(tui._make_chat_panel())
+
+    def test_the_latest_message_is_shown_on_a_short_terminal(self, tui):
+        tui.console = Console(file=io.StringIO(), width=100, height=14)
+        for index in range(15):
+            tui.add_user_message(f"message{index:02d}")
+        assert "message14" in render(tui._make_chat_panel(), width=100)
+
+    def test_a_taller_terminal_shows_more(self, tui):
+        for index in range(30):
+            tui.add_user_message(f"message{index:02d}")
+
+        tui.console = Console(file=io.StringIO(), width=100, height=16)
+        short = len(tui._fitting_messages(80, tui._body_height()))
+        tui.console = Console(file=io.StringIO(), width=100, height=60)
+        tall = len(tui._fitting_messages(80, tui._body_height()))
+        assert tall > short
+
+    def test_long_messages_take_more_room(self, tui):
+        tui.console = Console(file=io.StringIO(), width=100, height=30)
+        for _ in range(20):
+            tui.add_user_message("court")
+        short_fit = len(tui._fitting_messages(80, tui._body_height()))
+
+        tui.clear_history()
+        for _ in range(20):
+            tui.add_user_message("x" * 400)
+        long_fit = len(tui._fitting_messages(80, tui._body_height()))
+        assert long_fit < short_fit
+
+    def test_one_message_always_fits(self, tui):
+        """Even a message too long for the panel is better than an empty one."""
+        tui.console = Console(file=io.StringIO(), width=60, height=10)
+        tui.add_user_message("x" * 2000)
+        assert len(tui._fitting_messages(40, tui._body_height())) == 1
+
+    def test_panels_fit_a_short_terminal(self, tui):
+        tui.console = Console(file=io.StringIO(), width=80, height=24)
+        output = render(tui._make_chat_panel(), width=80)
+        assert len(output.splitlines()) <= tui._body_height()

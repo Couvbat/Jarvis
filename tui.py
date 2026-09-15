@@ -1,7 +1,9 @@
 """Terminal User Interface for Jarvis using Rich."""
 
+from collections import deque
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from math import ceil
+from typing import Any, Deque, Dict, List, Optional
 from rich.console import Console, Group
 from rich.layout import Layout
 from rich.panel import Panel
@@ -13,13 +15,24 @@ from rich import box
 from loguru import logger
 
 
+#: Rows the header and help bar take, plus each panel's border and padding.
+HEADER_ROWS = 5
+HELP_ROWS = 3
+PANEL_CHROME = 4
+
+#: Turns and actions kept in memory. A long session would otherwise hold the
+#: whole transcript, and only the last handful is ever rendered.
+MAX_CHAT_HISTORY = 500
+MAX_ACTIONS_LOG = 200
+
+
 class JarvisTUI:
     """Terminal UI for displaying chat history and actions."""
     
     def __init__(self):
         self.console = Console()
-        self.chat_history: List[Dict[str, Any]] = []
-        self.actions_log: List[Dict[str, Any]] = []
+        self.chat_history: Deque[Dict[str, Any]] = deque(maxlen=MAX_CHAT_HISTORY)
+        self.actions_log: Deque[Dict[str, Any]] = deque(maxlen=MAX_ACTIONS_LOG)
         self.current_status = "Initializing..."
         self.current_language = "en"
         self.live = None
@@ -49,50 +62,68 @@ class JarvisTUI:
             padding=(0, 1)
         )
     
+    def _body_height(self) -> int:
+        """Rows available to a body panel, in this terminal, right now."""
+        return max(4, self.console.size.height - HEADER_ROWS - HELP_ROWS)
+
+    def _fitting_messages(self, width: int, rows: int) -> List[Dict[str, Any]]:
+        """The most recent messages that fit, oldest of those first.
+
+        Taking the last N and hoping they fit is what hid the newest two
+        behind the bottom border: ten messages at two lines each overflowed a
+        twenty-row panel, and Rich crops the end.
+        """
+        budget = max(1, rows - PANEL_CHROME)
+        chosen: List[Dict[str, Any]] = []
+
+        for message in reversed(self.chat_history):
+            prefix = 12 + len(str(message.get("role", "")))
+            text = str(message.get("content", ""))
+            lines = max(1, ceil((len(text) + prefix) / max(20, width))) + 1
+            if chosen and budget - lines < 0:
+                break
+            budget -= lines
+            chosen.append(message)
+
+        chosen.reverse()
+        return chosen
+
     def _make_chat_panel(self) -> Panel:
         """Create the chat history panel."""
-        if not self.chat_history:
+        width = max(20, (self.console.size.width * 2) // 3 - PANEL_CHROME)
+        messages = self._fitting_messages(width, self._body_height())
+
+        if not messages:
             content = Text("No conversation yet...", style="dim italic")
         else:
             content = Group()
-            # Show last 10 messages
-            messages = self.chat_history[-10:]
-            
-            for msg in messages:
+            styles = {
+                "user": ("👤 You: ", "bold blue", "white"),
+                "assistant": ("🤖 Jarvis: ", "bold green", "white"),
+                "system": ("⚙️  ", "yellow", "yellow italic"),
+            }
+
+            for index, msg in enumerate(messages):
                 role = msg.get("role", "unknown")
-                text = msg.get("content", "")
-                timestamp = msg.get("timestamp", "")
-                
-                if role == "user":
-                    line = Text()
-                    line.append(f"[{timestamp}] ", style="dim")
-                    line.append("👤 You: ", style="bold blue")
-                    line.append(text, style="white")
-                    content.renderables.append(line)
-                    
-                elif role == "assistant":
-                    line = Text()
-                    line.append(f"[{timestamp}] ", style="dim")
-                    line.append("🤖 Jarvis: ", style="bold green")
-                    line.append(text, style="white")
-                    content.renderables.append(line)
-                    
-                elif role == "system":
-                    line = Text()
-                    line.append(f"[{timestamp}] ", style="dim")
-                    line.append("⚙️  ", style="yellow")
-                    line.append(text, style="yellow italic")
-                    content.renderables.append(line)
-                
-                # Add spacing between messages
-                content.renderables.append(Text(""))
+                if role not in styles:
+                    continue
+                label, label_style, body_style = styles[role]
+
+                line = Text()
+                line.append(f"[{msg.get('timestamp', '')}] ", style="dim")
+                line.append(label, style=label_style)
+                line.append(str(msg.get("content", "")), style=body_style)
+                content.renderables.append(line)
+
+                # No spacer after the last one: that row is a message.
+                if index < len(messages) - 1:
+                    content.renderables.append(Text(""))
         
         return Panel(
             content,
             title="💬 Conversation",
             border_style="blue",
             padding=(1, 2),
-            height=20
         )
     
     def _make_actions_panel(self) -> Panel:
@@ -111,8 +142,8 @@ class JarvisTUI:
             table.add_column("Action", style="cyan", width=20)
             table.add_column("Details", style="white")
             
-            # Show last 8 actions
-            for action in self.actions_log[-8:]:
+            visible = max(1, (self._body_height() - PANEL_CHROME) // 2)
+            for action in list(self.actions_log)[-visible:]:
                 timestamp = action.get("timestamp", "")
                 action_type = action.get("action", "")
                 details = action.get("details", "")
@@ -143,7 +174,6 @@ class JarvisTUI:
             title="⚡ Actions & Tools",
             border_style="magenta",
             padding=(1, 1),
-            height=12
         )
     
     def _make_help_panel(self) -> Panel:
@@ -167,9 +197,9 @@ class JarvisTUI:
         layout = Layout()
         
         layout.split_column(
-            Layout(name="header", size=5),
+            Layout(name="header", size=HEADER_ROWS),
             Layout(name="body"),
-            Layout(name="help", size=3)
+            Layout(name="help", size=HELP_ROWS)
         )
         
         layout["body"].split_row(
@@ -271,12 +301,12 @@ class JarvisTUI:
     
     def clear_history(self):
         """Clear chat history."""
-        self.chat_history = []
+        self.chat_history.clear()
         self.refresh()
     
     def clear_actions(self):
         """Clear actions log."""
-        self.actions_log = []
+        self.actions_log.clear()
         self.refresh()
     
     def prompt_confirmation(self, decision) -> tuple[bool, bool]:
