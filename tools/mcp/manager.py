@@ -92,6 +92,10 @@ class McpServer:
     def namespace(self) -> str:
         return self.config.name
 
+    @property
+    def is_connected(self) -> bool:
+        return self.status is ServerStatus.CONNECTED and self._group is not None
+
     def _qualify(self, tool_name: str, server_info: Any = None) -> str:
         return f"{self.namespace}{NAMESPACE_SEPARATOR}{tool_name}"
 
@@ -224,7 +228,7 @@ class McpServer:
 
     async def call(self, qualified_name: str, arguments: Dict[str, Any]) -> ToolResult:
         """Run one tool on this server."""
-        if self._group is None or self.status is not ServerStatus.CONNECTED:
+        if not self.is_connected:
             return ToolResult.error(
                 f"MCP server '{self.namespace}' is not connected ({self.status.value})"
             )
@@ -245,10 +249,15 @@ class McpServer:
 
         text = result_text(raw)
         if getattr(raw, "is_error", False):
-            return ToolResult(content=f"Error: {text}", ok=False, untrusted=True)
+            return ToolResult(
+                content=f"Error: {text}", ok=False,
+                untrusted=True, origin=self.namespace,
+            )
         # Everything a third-party server returns is content the user did not
-        # write, so it taints the turn exactly like a fetched web page.
-        return ToolResult(content=text, untrusted=True)
+        # write, so it taints the turn exactly like a fetched web page. The
+        # origin is the server, so reading more from it is not treated as
+        # carrying its content somewhere new.
+        return ToolResult(content=text, untrusted=True, origin=self.namespace)
 
 
 class McpManager:

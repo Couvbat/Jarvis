@@ -56,6 +56,10 @@ class ToolResult:
     ok: bool = True
     untrusted: bool = False
 
+    #: Where this content came from - a domain, an MCP server name. Used to
+    #: tell "read more from the same place" from "now send it somewhere else".
+    origin: Optional[str] = None
+
     @classmethod
     def error(cls, message: str) -> "ToolResult":
         """A failure the model should see and can act on."""
@@ -77,6 +81,17 @@ class ToolSpec:
 
     #: True when calling this sends data off the machine.
     egress: bool = False
+
+    #: Where a call would send data, derived from its arguments. Only
+    #: meaningful for egress tools, and it is what separates reading more from
+    #: a source that already tainted the turn from handing that source's
+    #: content to somewhere new.
+    origin_for: Optional[Callable[[Dict[str, Any]], str]] = None
+
+    #: The user authorised this out of band - by marking an MCP server
+    #: "trusted" in their configuration, say - so a non-destructive call needs
+    #: no prompt. It never overrides the destructive rule or taint escalation.
+    preapproved: bool = False
 
     #: Refines the risk from the actual arguments. Overwriting an existing
     #: file is destructive; creating a new one is not, and only the arguments
@@ -124,16 +139,31 @@ def to_ollama_schema(spec: ToolSpec) -> Dict[str, Any]:
     }
 
 
-def from_mcp_tool(tool: Any, namespace: str, handler: Callable[..., ToolResult]) -> ToolSpec:
+def from_mcp_tool(
+    tool: Any,
+    namespace: str,
+    handler: Callable[..., ToolResult],
+    risk: Risk = Risk.DESTRUCTIVE,
+    preapproved: bool = False,
+    scope_for: Optional[Callable[[Dict[str, Any]], str]] = None,
+    origin_for: Optional[Callable[[Dict[str, Any]], str]] = None,
+    precheck: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
+    qualified_name: Optional[str] = None,
+) -> ToolSpec:
     """Build a spec from an MCP tool description.
 
     Duck-typed on purpose: it needs ``name``, ``description`` and
     ``input_schema``, which is what ``mcp.types.Tool`` exposes, so this is
     testable without a server and without importing the MCP SDK.
 
-    The risk is always the worst case here. MCP annotations are declared by
-    the server, which is third-party code; they are carried in ``hints`` for
-    the policy engine to weigh against how much the user trusts that server.
+    ``risk`` defaults to the worst case. MCP annotations are declared by the
+    server, which is third-party code; they are carried in ``hints``, and only
+    a caller that knows how far the user trusts that server may pass a lower
+    risk (see tools/mcp/adapter.py).
+
+    ``qualified_name`` overrides the derived name. A caller that already holds
+    the name the session group assigned should pass it, so the spec's name and
+    the name its handler calls cannot drift apart.
     """
     annotations = getattr(tool, "annotations", None)
     hints = {}
@@ -145,11 +175,15 @@ def from_mcp_tool(tool: Any, namespace: str, handler: Callable[..., ToolResult])
     schema = getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None)
 
     return ToolSpec(
-        name=namespaced(namespace, tool.name),
+        name=qualified_name or namespaced(namespace, tool.name),
         description=getattr(tool, "description", "") or "",
         input_schema=schema or {"type": "object", "properties": {}},
         handler=handler,
-        risk=Risk.DESTRUCTIVE,
+        risk=risk,
+        preapproved=preapproved,
         egress=True,  # a server can be anywhere; assume the data leaves
         hints=hints,
+        scope_for=scope_for,
+        origin_for=origin_for,
+        precheck=precheck,
     )

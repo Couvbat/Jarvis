@@ -99,6 +99,13 @@ class TestCalling:
             assert result.ok is False
             assert "Error" in result.content
 
+    async def test_the_origin_is_the_server(self):
+        """So reading more from the same server is not treated as carrying
+        its content somewhere new."""
+        async with connected() as server:
+            result = await server.call("probe__echo", {"text": "hi"})
+            assert result.origin == "probe"
+
     async def test_an_error_result_is_still_untrusted(self):
         """Error text comes from the server too, so it taints like any other."""
         async with connected() as server:

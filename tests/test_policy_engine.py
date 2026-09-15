@@ -60,6 +60,33 @@ class TestTaint:
     def test_the_source_is_recorded(self, tainted):
         assert tainted.sources == ["web__fetch"]
 
+    def test_the_origin_is_recorded_when_given(self):
+        state = TaintState()
+        state.observe("web__fetch", ToolResult("p", untrusted=True, origin="a.test"))
+        assert state.origins == ["a.test"]
+
+    def test_the_tool_name_stands_in_for_a_missing_origin(self):
+        state = TaintState()
+        state.observe("web__fetch", ToolResult("p", untrusted=True))
+        assert state.origins == ["web__fetch"]
+
+    def test_origins_are_not_duplicated(self):
+        state = TaintState()
+        for _ in range(3):
+            state.observe("web__fetch", ToolResult("p", untrusted=True, origin="a.test"))
+        assert state.origins == ["a.test"]
+
+    def test_knows_origin(self):
+        state = TaintState()
+        state.observe("web__fetch", ToolResult("p", untrusted=True, origin="a.test"))
+        assert state.knows_origin("a.test") is True
+        assert state.knows_origin("b.test") is False
+        assert state.knows_origin(None) is False
+
+    def test_reset_clears_origins(self, tainted):
+        tainted.reset()
+        assert tainted.origins == []
+
     def test_sources_are_not_duplicated(self):
         state = TaintState()
         for _ in range(3):
@@ -270,6 +297,35 @@ class TestTaintEscalation:
         assert decision.surface is Surface.VOICE
 
 
+class TestPreapproved:
+    """Some authorisation is given in configuration, not at a prompt."""
+
+    def test_a_preapproved_read_runs_without_asking(self, engine):
+        spec = make_spec("mcp__peek", Risk.READ_ONLY, preapproved=True)
+        assert engine.evaluate(spec, {}).is_automatic is True
+
+    def test_a_preapproved_write_runs_without_asking(self, engine):
+        spec = make_spec("mcp__put", Risk.WRITE, preapproved=True)
+        assert engine.evaluate(spec, {}).is_automatic is True
+
+    def test_it_never_waves_through_a_destructive_call(self, engine):
+        spec = make_spec("mcp__wipe", Risk.DESTRUCTIVE, preapproved=True)
+        assert engine.evaluate(spec, {}).surface is Surface.TERMINAL
+
+    def test_it_does_not_survive_taint(self, engine, tainted):
+        """Configured trust is not trust in whatever a web page just said."""
+        spec = make_spec("mcp__put", Risk.WRITE, preapproved=True, egress=True)
+        assert engine.evaluate(spec, {}, tainted).surface is Surface.TERMINAL
+
+    def test_it_never_waves_through_a_refused_call(self, engine):
+        spec = make_spec(preapproved=True, precheck=lambda a: "server is down")
+        assert engine.evaluate(spec, {}).allowed is False
+
+    def test_the_reason_says_where_the_authorisation_came_from(self, engine):
+        spec = make_spec("mcp__peek", Risk.READ_ONLY, preapproved=True)
+        assert "configuration" in engine.evaluate(spec, {}).reason
+
+
 class TestPrecheck:
     """A call that cannot succeed is refused before the user is asked.
 
@@ -314,6 +370,74 @@ class TestPrecheck:
         if decision.allowed:  # pragma: no cover - guarded by the test above
             engine.remember(decision)
         assert store.all() == []
+
+
+class TestOriginAwareEscalation:
+    """Taint escalation asks where the content would go, not just whether the
+    turn is dirty.
+
+    Reading a second note from the server that just answered is not the
+    exfiltration shape. Escalating it would turn every multi-step workflow
+    into a wall of prompts, which is how people learn to stop reading them.
+    """
+
+    def egress_spec(self, name="mcp__read", origin="notes"):
+        return make_spec(
+            name, Risk.READ_ONLY, egress=True, origin_for=lambda a: origin
+        )
+
+    def tainted_by(self, origin):
+        state = TaintState()
+        state.observe("source", ToolResult("content", untrusted=True, origin=origin))
+        return state
+
+    def test_reading_more_from_the_same_source_is_not_escalated(self, engine):
+        spec = self.egress_spec(origin="notes")
+        decision = engine.evaluate(spec, {}, self.tainted_by("notes"))
+        assert decision.surface is not Surface.TERMINAL
+
+    def test_reaching_a_different_source_is_escalated(self, engine):
+        spec = self.egress_spec(origin="evil.test")
+        decision = engine.evaluate(spec, {}, self.tainted_by("example.com"))
+        assert decision.surface is Surface.TERMINAL
+        assert "evil.test" in decision.reason
+
+    def test_a_tool_that_cannot_name_its_origin_is_escalated(self, engine):
+        """Unknown destination is treated as a new one."""
+        spec = make_spec("mcp__do", Risk.READ_ONLY, egress=True)
+        assert engine.evaluate(spec, {}, self.tainted_by("notes")).surface \
+            is Surface.TERMINAL
+
+    def test_a_failing_origin_function_is_escalated(self, engine):
+        def explode(arguments):
+            raise RuntimeError("cannot tell")
+
+        spec = make_spec("mcp__do", Risk.READ_ONLY, egress=True, origin_for=explode)
+        assert engine.evaluate(spec, {}, self.tainted_by("notes")).surface \
+            is Surface.TERMINAL
+
+    def test_a_write_is_escalated_whatever_the_origin(self, engine):
+        """Origin only softens egress; writing after untrusted content never
+        gets a pass."""
+        spec = make_spec("mcp__put", Risk.WRITE, egress=True, origin_for=lambda a: "notes")
+        assert engine.evaluate(spec, {}, self.tainted_by("notes")).surface \
+            is Surface.TERMINAL
+
+    def test_several_origins_accumulate(self, engine):
+        state = self.tainted_by("notes")
+        state.observe("web__fetch", ToolResult("page", untrusted=True, origin="a.test"))
+        assert engine.evaluate(self.egress_spec(origin="a.test"), {}, state).surface \
+            is not Surface.TERMINAL
+        assert engine.evaluate(self.egress_spec(origin="b.test"), {}, state).surface \
+            is Surface.TERMINAL
+
+    def test_a_preapproved_tool_still_loses_it_across_origins(self, engine):
+        spec = make_spec(
+            "mcp__read", Risk.READ_ONLY, egress=True,
+            preapproved=True, origin_for=lambda a: "elsewhere",
+        )
+        assert engine.evaluate(spec, {}, self.tainted_by("notes")).surface \
+            is Surface.TERMINAL
 
 
 class TestScope:

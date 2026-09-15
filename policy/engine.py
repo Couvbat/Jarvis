@@ -91,6 +91,18 @@ class PolicyEngine:
                 logger.warning(f"{spec.name} could not describe its scope: {e}")
         return repr(sorted((str(k), str(v)) for k, v in arguments.items()))
 
+    def origin_for(
+        self, spec: ToolSpec, arguments: Dict[str, Any]
+    ) -> Optional[str]:
+        """Where a call would send data, if the tool can say."""
+        if spec.origin_for is None:
+            return None
+        try:
+            return spec.origin_for(arguments)
+        except Exception as e:
+            logger.warning(f"{spec.name} could not describe its origin: {e}")
+            return None
+
     def evaluate(
         self,
         spec: ToolSpec,
@@ -129,10 +141,30 @@ class PolicyEngine:
         if risk >= Risk.DESTRUCTIVE:
             return decide(Surface.TERMINAL, "this destroys or overwrites data")
 
-        # Once untrusted content is in the turn, anything that writes or
-        # leaves the machine is escalated, whatever was approved before.
-        if taint.tainted and (risk >= Risk.WRITE or spec.egress):
+        # Once untrusted content is in the turn, writing is escalated
+        # whatever was approved before.
+        if taint.tainted and risk >= Risk.WRITE:
             return decide(Surface.TERMINAL, taint.describe())
+
+        # Egress is escalated when it would carry that content somewhere new.
+        # Reading a second note from the server that just answered is not the
+        # exfiltration shape, and escalating it would make every multi-step
+        # workflow a wall of prompts - which is how people learn to stop
+        # reading them.
+        if taint.tainted and spec.egress:
+            origin = self.origin_for(spec, arguments)
+            if not taint.knows_origin(origin):
+                return decide(
+                    Surface.TERMINAL,
+                    f"{taint.describe()}, and this would reach "
+                    f"{origin or 'somewhere else'}",
+                )
+
+        if spec.preapproved:
+            # Authorised in configuration rather than by a prompt. The two
+            # rules above still hold: this cannot wave through a destructive
+            # call or one made after untrusted content entered the turn.
+            return decide(Surface.NONE, "authorised in configuration")
 
         if self.store.is_approved(spec.name, scope, risk):
             return decide(Surface.NONE, "previously approved")

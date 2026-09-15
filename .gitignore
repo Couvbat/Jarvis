@@ -12,8 +12,9 @@ ENV/
 # Environment
 .env
 
-# Whitelist
+# Local state
 command_whitelist.json
+mcp_servers.json
 
 # Test and tooling artifacts
 .pytest_cache/

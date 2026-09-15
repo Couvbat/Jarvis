@@ -14,7 +14,7 @@ it, whatever they approved before.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from loguru import logger
 
@@ -27,6 +27,8 @@ class TaintState:
 
     tainted: bool = False
     sources: List[str] = field(default_factory=list)
+    #: The places the untrusted content came from: a domain, a server name.
+    origins: List[str] = field(default_factory=list)
 
     def observe(self, tool_name: str, result: ToolResult) -> None:
         """Record a tool result, marking the turn if it came from outside."""
@@ -36,6 +38,17 @@ class TaintState:
             self.tainted = True
             if tool_name not in self.sources:
                 self.sources.append(tool_name)
+            origin = result.origin or tool_name
+            if origin not in self.origins:
+                self.origins.append(origin)
+
+    def knows_origin(self, origin: Optional[str]) -> bool:
+        """True when this turn's untrusted content already came from there.
+
+        Reading more from a source that already tainted the turn is not the
+        shape worth escalating; handing its content somewhere *new* is.
+        """
+        return origin is not None and origin in self.origins
 
     def describe(self) -> str:
         """Why the turn is tainted, for the confirmation prompt."""
@@ -47,3 +60,4 @@ class TaintState:
         """Start a fresh turn. Taint does not carry over."""
         self.tainted = False
         self.sources = []
+        self.origins = []

@@ -11,7 +11,7 @@ from llm_module import LLMModule
 from policy.engine import PolicyEngine, Surface
 from policy.store import ApprovalStore
 from policy.taint import TaintState
-from tools.builtin import build_default_registry
+from tools.builtin import attach_mcp_tools, build_default_registry, build_mcp_manager
 from tools.schema import ToolResult
 from tts_module import TTSModule
 from tui import JarvisTUI
@@ -76,6 +76,7 @@ class Jarvis:
         
         # Tools and the policy that gates them
         self.registry = build_default_registry()
+        self.mcp = build_mcp_manager()
         self.policy = PolicyEngine(ApprovalStore(settings.approvals_path))
         self.taint = TaintState()
 
@@ -134,6 +135,29 @@ class Jarvis:
                 print("Cancelled")
                 return (False, False)
             print(f"Please answer {choices}.")
+
+    async def start(self):
+        """Bring up anything that needs the event loop.
+
+        MCP servers are subprocesses or network sessions, so they cannot be
+        started from __init__; and a server that will not come up must not
+        stop the assistant from running without it.
+        """
+        try:
+            await attach_mcp_tools(self.registry, self.mcp)
+        except Exception as e:
+            logger.error(f"MCP startup failed: {e}")
+
+        if self.use_tui and self.mcp.servers:
+            for name, status in self.mcp.statuses().items():
+                self.tui.add_system_message(f"MCP {name}: {status}")
+
+    async def aclose(self):
+        """Disconnect the MCP servers."""
+        try:
+            await self.mcp.stop()
+        except Exception as e:  # pragma: no cover - reported by the manager
+            logger.error(f"MCP shutdown failed: {e}")
 
     async def _speak(self, text: str):
         """Say something out loud, falling back to the terminal if TTS fails."""
@@ -251,6 +275,7 @@ class Jarvis:
 
     async def run_interactive(self):
         """Run in interactive voice mode."""
+        await self.start()
         if not self.use_tui:
             logger.info("\n" + "="*50)
             logger.info("Jarvis Voice Assistant - Interactive Mode")
@@ -397,11 +422,13 @@ class Jarvis:
             logger.error(f"Fatal error: {e}")
             raise
         finally:
+            await self.aclose()
             if self.use_tui:
                 self.tui.stop()
     
     async def run_text_mode(self):
         """Run in text-only mode (no voice I/O)."""
+        await self.start()
         logger.info("\n" + "="*50)
         logger.info("Jarvis Voice Assistant - Text Mode")
         logger.info("Type 'exit' to quit")
@@ -436,6 +463,8 @@ class Jarvis:
         except Exception as e:
             logger.error(f"Fatal error: {e}")
             raise
+        finally:
+            await self.aclose()
 
 
 def main():

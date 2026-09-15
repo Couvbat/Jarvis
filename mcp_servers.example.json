@@ -1,0 +1,39 @@
+{
+  "_comment": [
+    "Copy to mcp_servers.json. The mcpServers object is the same shape other",
+    "MCP hosts use, so an existing configuration can be dropped in as-is.",
+    "Jarvis adds two keys: 'enabled' and 'trust'.",
+    "",
+    "trust:",
+    "  confirm   (default) every call is confirmed; you may approve a tool so",
+    "            you are not asked again. Use this for anything you did not",
+    "            write yourself.",
+    "  trusted   read-only tools run without asking; other calls are confirmed",
+    "            once and can be approved. Tools the server marks destructive",
+    "            still need the keyboard every time.",
+    "  readonly  only tools the server marks read-only are exposed at all.",
+    "",
+    "A server's own annotations can only make a tool look more dangerous,",
+    "never safer: they are written by the server, not by you."
+  ],
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "~/Documents"],
+      "trust": "confirm",
+      "enabled": false
+    },
+    "git": {
+      "command": "uvx",
+      "args": ["mcp-server-git", "--repository", "~/code/project"],
+      "trust": "readonly",
+      "enabled": false
+    },
+    "remote-example": {
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer replace-me" },
+      "trust": "confirm",
+      "enabled": false
+    }
+  }
+}

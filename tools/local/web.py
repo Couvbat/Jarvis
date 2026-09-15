@@ -166,8 +166,13 @@ class WebTools:
                 text += "\n… (truncated)"
 
             logger.info(f"Fetched {len(text)} characters from {current}")
-            # Untrusted: whoever wrote this page is not the user.
-            return ToolResult(f"Content from {current}:\n{text}", untrusted=True)
+            # Untrusted: whoever wrote this page is not the user. The origin is
+            # the host it actually came from - after redirects, not before.
+            return ToolResult(
+                f"Content from {current}:\n{text}",
+                untrusted=True,
+                origin=urlparse(current).netloc or None,
+            )
 
         return ToolResult.error(f"too many redirects starting from {url}")
 
@@ -251,6 +256,7 @@ def build_tools(
             risk=Risk.READ_ONLY,
             egress=True,
             scope_for=_domain_scope,
+            origin_for=_domain_scope,
             precheck=_url_precheck(allow_private_network),
         ),
     ]
