@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     max_fetch_bytes: int = 2_000_000
     fetch_timeout: int = 10
     
+    # MCP servers
+    mcp_config_path: str = "mcp_servers.json"
+    mcp_connect_timeout: float = 15.0
+    mcp_call_timeout: float = 60.0
+    
     # Persistent state
     data_dir: str = "~/.local/share/jarvis"
     

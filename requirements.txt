@@ -16,6 +16,9 @@ requests>=2.31.0
 # Text-to-Speech (Piper will be installed separately)
 # Piper TTS - binary installation via script
 
+# MCP client (external services)
+mcp>=2.2,<3
+
 # System integration
 psutil>=5.9.0
 beautifulsoup4>=4.12.0
