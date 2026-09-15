@@ -2,7 +2,6 @@
 
 import asyncio
 import sys
-import unicodedata
 from loguru import logger
 from config import settings
 from audio_handler import AudioHandler
@@ -12,6 +11,7 @@ from policy.engine import PolicyEngine, Surface
 from policy.store import ApprovalStore
 from policy.taint import TaintState
 from tools.builtin import attach_mcp_tools, build_default_registry, build_mcp_manager
+from text_utils import normalise
 from tools.schema import ToolResult
 from tts_module import TTSModule
 from tui import JarvisTUI
@@ -32,16 +32,8 @@ _TRAILING_FILLER = ("s il te plait", "s il vous plait", "please", "now", "mainte
 _ADDRESS = ("jarvis", "ok", "okay", "hey")
 
 
-def normalise_utterance(text: str) -> str:
-    """Lowercase, drop accents and punctuation, collapse whitespace.
-
-    Whisper's output varies in accents and punctuation between runs, so
-    commands are compared on this normalised form.
-    """
-    decomposed = unicodedata.normalize("NFD", text.lower())
-    unaccented = "".join(c for c in decomposed if not unicodedata.combining(c))
-    cleaned = "".join(c if c.isalnum() or c.isspace() else " " for c in unaccented)
-    return " ".join(cleaned.split())
+#: Kept as a module-level name: the exit-command tests read it directly.
+normalise_utterance = normalise
 
 
 def is_exit_command(text: str) -> bool:

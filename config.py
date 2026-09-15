@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     ollama_model: str = "llama3.1:8b"
     llm_temperature: float = 0.7
     llm_max_tokens: int = 1000
+    # Ollama's context window defaults to a few thousand tokens whatever the
+    # model's native size, and tool schemas are re-sent every turn. Raising
+    # this costs RAM; leaving it low silently truncates the conversation.
+    llm_num_ctx: int = 8192
+    # Above this many tools, only the ones relevant to the turn are offered:
+    # a small model stops picking correctly past a dozen or so.
+    tool_selection_threshold: int = 20
+    tool_selection_top_k: int = 15
     
     # TTS settings
     piper_model: str = "en_US-lessac-medium"

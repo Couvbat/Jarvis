@@ -220,11 +220,14 @@ Jarvis/
 ├── llm_module.py          # LLM integration (Ollama)
 ├── tts_module.py          # Text-to-speech (Piper)
 ├── tui.py                 # Rich terminal interface
+├── text_utils.py          # Shared normalisation and tokenisation
 ├── tools/                 # Tool layer
 │   ├── schema.py          #   tool specs, risk levels, MCP conversion
 │   ├── registry.py        #   registration and dispatch
+│   ├── selection.py       #   which tools to offer this turn
 │   ├── builtin.py         #   assembling the built-in tools
-│   └── local/             #   filesystem (CRUD), web, applications
+│   ├── local/             #   filesystem (CRUD), web, applications
+│   └── mcp/               #   MCP client: config, connections, adapter
 ├── policy/                # What a tool call is allowed to do
 │   ├── paths.py           #   sandbox and denied patterns
 │   ├── engine.py          #   auto / confirm / refuse decisions
@@ -408,7 +411,30 @@ ruff check .
 
 The suite stubs every native and network dependency (`sounddevice`,
 `webrtcvad`, `faster-whisper`, `ollama`), so it runs on a bare machine in
-about a second. See [tests/README.md](tests/README.md).
+about a second. MCP tests drive a real server over the SDK's in-memory
+transport. See [tests/README.md](tests/README.md).
+
+### Connecting MCP servers
+
+Copy [mcp_servers.example.json](mcp_servers.example.json) to
+`mcp_servers.json`. The `mcpServers` object is the shape other MCP hosts use,
+so an existing configuration works unchanged; Jarvis adds `enabled` and
+`trust` (`confirm` by default, `trusted`, or `readonly`).
+
+A server's own annotations can only make one of its tools look *more*
+dangerous, never safer — they are written by the server. What relaxes a tool
+is the trust level you set.
+
+### Choosing a model
+
+Which local model calls tools well changes faster than any recommendation, and
+it depends on the machine. Measure it:
+
+```bash
+python tests/eval/run_tool_calling.py --model llama3.1:8b --compare
+```
+
+See [tests/eval/README.md](tests/eval/README.md).
 
 ### Project status
 

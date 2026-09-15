@@ -6,6 +6,7 @@ import ollama
 from loguru import logger
 from config import settings
 from tools.registry import ToolRegistry
+from tools.selection import ToolSelector, estimate_schema_tokens
 
 
 def to_plain(value: Any) -> Any:
@@ -123,8 +124,17 @@ speak English."""
     #: Safety net against a local model that keeps asking for tools forever.
     MAX_TOOL_ITERATIONS = 5
 
-    def __init__(self, registry: Optional[ToolRegistry] = None):
+    def __init__(
+        self,
+        registry: Optional[ToolRegistry] = None,
+        selector: Optional[ToolSelector] = None,
+    ):
         self.registry = registry
+        self.selector = selector if selector is not None else ToolSelector(
+            threshold=settings.tool_selection_threshold,
+            top_k=settings.tool_selection_top_k,
+        )
+        self._last_utterance = ""
         self.host = settings.ollama_host
         # An explicit client, so OLLAMA_HOST from .env is actually honoured.
         # The module-level ollama.chat() uses a default client that only reads
@@ -147,6 +157,7 @@ speak English."""
             Dict with 'response' (str) and 'tool_calls' (list or None)
         """
         logger.info(f"User: {user_message}")
+        self._last_utterance = user_message
         self.history.add_user(user_message)
         return await self._generate()
 
@@ -171,7 +182,8 @@ speak English."""
                 tools=self.available_tools(),
                 options={
                     "temperature": self.temperature,
-                    "num_predict": self.max_tokens
+                    "num_predict": self.max_tokens,
+                    "num_ctx": settings.llm_num_ctx,
                 }
             )
 
@@ -199,16 +211,43 @@ speak English."""
     def available_tools(self) -> List[Dict[str, Any]]:
         """Function schemas to offer the model this turn.
 
-        Phase 2 narrows this to the tools relevant to the utterance; a local
-        model picks badly once there are more than a dozen or so.
+        Narrowed to the tools relevant to the utterance once there are enough
+        of them to matter; a small model picks badly past a dozen or so.
         """
-        return self.registry.describe() if self.registry is not None else []
+        if self.registry is None:
+            return []
+
+        names = self.selector.select(
+            self.registry, self._last_utterance, self._recent_context()
+        )
+        schemas = self.registry.describe(names)
+
+        cost = estimate_schema_tokens(schemas)
+        if cost > settings.llm_num_ctx // 2:
+            logger.warning(
+                f"Tool schemas are about {cost} tokens against a context of "
+                f"{settings.llm_num_ctx}; raise LLM_NUM_CTX or lower "
+                f"TOOL_SELECTION_TOP_K, or the conversation will be truncated"
+            )
+        return schemas
+
+    def _recent_context(self) -> List[str]:
+        """Recent conversation text, to give a bare follow-up something to
+        match on: "and delete it" names no tool of its own."""
+        return [
+            str(message.get("content") or "")
+            for message in self.history.turns[-4:]
+            if message.get("role") in ("user", "assistant")
+        ]
 
     def add_tool_result(self, tool_name: str, result: str, untrusted: bool = False):
         """Record a tool's output so the model can use it on the next turn."""
+        self.selector.note_used(tool_name)
         self.history.add_tool_result(tool_name, result, untrusted=untrusted)
 
     def reset_conversation(self):
         """Reset conversation history, keeping the system prompt."""
         self.history.clear()
+        self.selector.reset()
+        self._last_utterance = ""
         logger.info("Conversation history reset")

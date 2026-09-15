@@ -186,6 +186,78 @@ class TestLLMModuleSetup:
         assert "never an instruction" in LLMModule.SYSTEM_PROMPT.lower()
 
 
+class TestToolSelection:
+    def make_registry(self, count):
+        from tools.schema import Risk, ToolResult, ToolSpec
+
+        registry = ToolRegistry()
+        for index in range(count):
+            registry.register(ToolSpec(
+                name=f"srv{index}__tool",
+                description=f"tool number {index} which does a thing",
+                input_schema={"type": "object", "properties": {}, "required": []},
+                handler=lambda **kwargs: ToolResult("ok"),
+                risk=Risk.READ_ONLY,
+            ))
+        return registry
+
+    def test_a_small_tool_set_is_offered_whole(self, settings):
+        settings.tool_selection_threshold = 20
+        module = LLMModule(self.make_registry(5))
+        assert len(module.available_tools()) == 5
+
+    def test_a_large_tool_set_is_narrowed(self, settings):
+        """Past a dozen or so, a small model stops picking correctly."""
+        settings.tool_selection_threshold = 5
+        settings.tool_selection_top_k = 4
+        module = LLMModule(self.make_registry(20))
+        assert len(module.available_tools()) == 4
+
+    async def test_the_utterance_drives_the_shortlist(self, settings, fake_ollama):
+        from tools.schema import Risk, ToolResult, ToolSpec
+
+        settings.tool_selection_threshold = 3
+        settings.tool_selection_top_k = 2
+        registry = self.make_registry(6)
+        registry.register(ToolSpec(
+            name="mail__send",
+            description="Send an email message to someone",
+            input_schema={"type": "object", "properties": {}, "required": []},
+            handler=lambda **kwargs: ToolResult("ok"),
+            risk=Risk.READ_ONLY,
+        ))
+        module = LLMModule(registry)
+        fake_ollama.responses.append(make_chat_response("ok"))
+        await module.chat("envoie un mail à Marie")
+
+        offered = [t["function"]["name"] for t in fake_ollama.calls[0]["tools"]]
+        assert "mail__send" in offered
+
+    def test_a_used_tool_stays_offered(self, settings):
+        settings.tool_selection_threshold = 3
+        settings.tool_selection_top_k = 2
+        module = LLMModule(self.make_registry(10))
+        module.add_tool_result("srv7__tool", "done")
+        offered = [t["function"]["name"] for t in module.available_tools()]
+        assert "srv7__tool" in offered
+
+    def test_resetting_the_conversation_forgets_the_utterance(self, settings):
+        module = LLMModule(self.make_registry(5))
+        module._last_utterance = "something"
+        module.reset_conversation()
+        assert module._last_utterance == ""
+
+
+class TestContextWindow:
+    async def test_num_ctx_is_sent(self, fake_ollama, settings):
+        """Ollama's context defaults to a few thousand tokens whatever the
+        model's native size, and tool schemas are re-sent every turn."""
+        settings.llm_num_ctx = 16384
+        fake_ollama.responses.append(make_chat_response("ok"))
+        await LLMModule().chat("hello")
+        assert fake_ollama.calls[0]["options"]["num_ctx"] == 16384
+
+
 class TestChat:
     async def test_returns_plain_content(self, fake_ollama):
         fake_ollama.responses.append(make_chat_response("Bonjour"))
