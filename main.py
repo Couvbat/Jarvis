@@ -11,6 +11,7 @@ from policy.engine import PolicyEngine, Surface
 from policy.store import ApprovalStore
 from policy.taint import TaintState
 from tools.builtin import attach_mcp_tools, build_default_registry, build_mcp_manager
+from speech.barge_in import VAD_FRAME_MS, BargeInListener
 from speech.chunker import SentenceChunker
 from speech.pipeline import SpeechPipeline
 from text_utils import normalise
@@ -81,6 +82,8 @@ class Jarvis:
         self.llm = LLMModule(self.registry)
         self.tts = TTSModule()
         self.speech = SpeechPipeline(self.tts, self.audio, on_fallback=self._show)
+        #: Audio captured by an interruption, to start the next turn with.
+        self._carried_audio = None
         
         # Load models
         logger.info("Loading models (this may take a moment)...")
@@ -174,6 +177,49 @@ class Jarvis:
             self.speech.say(text)
         else:
             print(text, end=" ", flush=True)
+
+    async def _finish_speaking(self) -> bool:
+        """Wait for the answer to finish, unless the user talks over it.
+
+        Returns whether they did. The words that interrupted are kept for the
+        turn they begin: losing the start of a sentence would make
+        interrupting worse than waiting.
+        """
+        if not self.speak_aloud:
+            await self.speech.drain()
+            return False
+
+        if not settings.barge_in:
+            await self.speech.drain()
+            return False
+
+        listener = BargeInListener(
+            self.audio,
+            min_speech_frames=max(
+                1, settings.barge_in_min_speech_ms // VAD_FRAME_MS
+            ),
+        )
+        await listener.start()
+
+        drained = asyncio.create_task(self.speech.drain())
+        interrupted = asyncio.create_task(listener.detected.wait())
+        done, pending = await asyncio.wait(
+            {drained, interrupted}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+
+        captured = await listener.stop()
+
+        if interrupted in done:
+            logger.info("Interrupted by the user")
+            await self.speech.interrupt()
+            self._carried_audio = captured
+            if self.use_tui:
+                self.tui.add_system_message("Interrupted")
+            return True
+
+        return False
 
     async def _speak(self, text: str) -> None:
         """Say one fixed phrase and wait for it, e.g. a goodbye."""
@@ -322,10 +368,12 @@ class Jarvis:
                 
                 # Record audio
                 try:
+                    carried, self._carried_audio = self._carried_audio, None
                     audio_data = await asyncio.to_thread(
                         self.audio.record_until_silence,
                         silence_threshold=1.5,
                         max_duration=30.0,
+                        prefix=carried,
                     )
                     
                     if len(audio_data) < 1000:  # Too short
@@ -438,10 +486,11 @@ class Jarvis:
                     await self._speak("I encountered an error processing your request.")
                 
                 # The answer was spoken sentence by sentence as it arrived;
-                # wait for the tail before listening again.
+                # wait for the tail before listening again - unless the user
+                # talks over it, which ends this turn and starts the next.
                 if self.use_tui:
                     self.tui.update_status("Speaking...")
-                await self.speech.drain()
+                await self._finish_speaking()
                 
                 if self.use_tui:
                     self.tui.update_status("Ready")

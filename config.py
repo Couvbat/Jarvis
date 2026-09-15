@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     )
     
     # Audio settings
+    # Off by default: a microphone in the same room as a speaker hears the
+    # speaker, so without echo cancellation Jarvis interrupts itself. With
+    # headphones, or a mic that cancels echo in hardware, turn this on.
+    barge_in: bool = False
+    barge_in_min_speech_ms: int = 200
     sample_rate: int = 16000
     channels: int = 1
     # 20 ms at 16 kHz. Silence is only re-checked once per captured block, so

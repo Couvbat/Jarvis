@@ -1,5 +1,6 @@
 """Tests for the orchestration loop (main.py)."""
 
+import asyncio
 import builtins
 
 import numpy as np
@@ -404,6 +405,101 @@ class TestEventLoopIsNotBlocked:
         ]
         await instance.process_user_input("écris")
         assert seen["thread"] != loop_thread
+
+
+class TestBargeIn:
+    """Speaking over an answer ends it and starts the next turn."""
+
+    async def test_disabled_by_default_the_answer_finishes(self, jarvis, wiring, settings):
+        """On open speakers the microphone hears Jarvis, so this is opt-in."""
+        assert settings.barge_in is False
+        wiring["stt"].script = ["bonjour", "exit"]
+        wiring["llm"].script = [{"response": "Une réponse complète.", "tool_calls": None}]
+        await jarvis.run_interactive()
+        assert any("réponse" in text for text in wiring["tts"].spoken)
+
+    async def test_an_interruption_cuts_the_answer_short(
+        self, jarvis, wiring, settings, monkeypatch
+    ):
+        settings.barge_in = True
+        interrupted = []
+
+        class Interrupting:
+            def __init__(self, audio, **kwargs):
+                self.detected = asyncio.Event()
+                self.detected.set()  # the user was already talking
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                return np.full(320, 1234, dtype=np.int16)
+
+        monkeypatch.setattr(main_module, "BargeInListener", Interrupting)
+        monkeypatch.setattr(
+            jarvis.speech, "interrupt",
+            lambda: interrupted.append(True) or asyncio.sleep(0),
+        )
+
+        wiring["stt"].script = ["bonjour", "exit"]
+        wiring["llm"].script = [{"response": "Une réponse.", "tool_calls": None}]
+        await jarvis.run_interactive()
+        assert interrupted
+
+    async def test_the_interrupting_words_start_the_next_turn(
+        self, jarvis, wiring, settings, monkeypatch
+    ):
+        """Losing the start of a sentence would make interrupting worse than
+        waiting."""
+        settings.barge_in = True
+        captured = np.full(320, 1234, dtype=np.int16)
+
+        class Interrupting:
+            def __init__(self, audio, **kwargs):
+                self.detected = asyncio.Event()
+                self.detected.set()
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                return captured
+
+        monkeypatch.setattr(main_module, "BargeInListener", Interrupting)
+
+        prefixes = []
+
+        def record(**kwargs):
+            prefixes.append(kwargs.get("prefix"))
+            return np.zeros(16000, dtype=np.int16)
+
+        monkeypatch.setattr(wiring["audio"], "record_until_silence", record)
+        wiring["stt"].script = ["bonjour", "exit"]
+        wiring["llm"].script = [{"response": "Une réponse.", "tool_calls": None}]
+        await jarvis.run_interactive()
+
+        assert any(prefix is not None for prefix in prefixes)
+
+    async def test_the_carried_audio_is_used_once(self, jarvis, wiring, settings):
+        """It belongs to the turn it started, not to every turn after."""
+        jarvis._carried_audio = np.full(320, 1234, dtype=np.int16)
+        assert jarvis._carried_audio is not None
+        wiring["stt"].script = ["exit"]
+        await jarvis.run_interactive()
+        assert jarvis._carried_audio is None
+
+    async def test_text_mode_never_listens_for_an_interruption(
+        self, jarvis, wiring, settings, monkeypatch
+    ):
+        settings.barge_in = True
+        built = []
+        monkeypatch.setattr(
+            main_module, "BargeInListener", lambda *a, **k: built.append(True)
+        )
+        answers = iter(["bonjour", "exit"])
+        monkeypatch.setattr(builtins, "input", lambda *a: next(answers))
+        await jarvis.run_text_mode()
+        assert built == []
 
 
 class TestVoiceLoop:

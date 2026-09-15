@@ -64,6 +64,7 @@ class AudioHandler:
         silence_threshold: float = 1.0,
         max_duration: float = 30.0,
         min_duration: float = 0.5,
+        prefix: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
         Record audio until the speaker falls silent.
@@ -73,6 +74,9 @@ class AudioHandler:
             max_duration: Hard cap on the recording length in seconds
             min_duration: Never stop on silence before this many seconds, so a
                 pause before the first word does not end the recording
+            prefix: Audio already captured, prepended to the result. Barge-in
+                hears the first words before this recording starts, and losing
+                them would cost the user the beginning of their sentence.
 
         Returns:
             Mono audio as a flat int16 numpy array
@@ -132,10 +136,14 @@ class AudioHandler:
             logger.error(f"Recording error: {e}")
             raise
 
+        head = self._to_mono(prefix) if prefix is not None and len(prefix) else None
+
         if not blocks:
-            return np.array([], dtype=np.int16)
+            return head if head is not None else np.array([], dtype=np.int16)
 
         audio_data = self._to_mono(np.concatenate(blocks, axis=0))
+        if head is not None:
+            audio_data = np.concatenate([head, audio_data])
         logger.info(f"Recording complete: {len(audio_data) / self.sample_rate:.2f}s")
 
         return audio_data
