@@ -474,18 +474,18 @@ class TestToolSpecs:
     def test_every_tool_has_a_description(self, registry):
         assert all(len(spec.description) > 10 for spec in registry.specs())
 
-    def test_dispatch_through_the_registry_works(self, registry, root):
-        result = registry.call("fs__write", {"path": str(root / "a.txt"), "content": "hi"})
+    async def test_dispatch_through_the_registry_works(self, registry, root):
+        result = await registry.call("fs__write", {"path": str(root / "a.txt"), "content": "hi"})
         assert result.ok is True
         assert (root / "a.txt").read_text() == "hi"
 
-    def test_a_refused_path_comes_back_as_a_result(self, registry, tmp_path):
-        result = registry.call("fs__read", {"path": str(tmp_path / "outside.txt")})
+    async def test_a_refused_path_comes_back_as_a_result(self, registry, tmp_path):
+        result = await registry.call("fs__read", {"path": str(tmp_path / "outside.txt")})
         assert result.ok is False
         assert "outside the allowed directories" in result.content
 
-    def test_a_missing_required_argument_is_reported(self, registry):
-        assert registry.call("fs__read", {}).ok is False
+    async def test_a_missing_required_argument_is_reported(self, registry):
+        assert (await registry.call("fs__read", {})).ok is False
 
     def test_every_tool_refuses_an_out_of_sandbox_path_up_front(self, registry, tmp_path):
         """The precheck lets the policy engine refuse without asking the user."""

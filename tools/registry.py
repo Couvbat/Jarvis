@@ -6,6 +6,8 @@ agent loop never needs to know where a capability comes from.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from typing import Any, Dict, Iterable, List, Optional
 
 from loguru import logger
@@ -68,8 +70,15 @@ class ToolRegistry:
             selected = [self._tools[name] for name in names if name in self._tools]
         return [to_ollama_schema(spec) for spec in selected]
 
-    def call(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> ToolResult:
+    async def call(
+        self, name: str, arguments: Optional[Dict[str, Any]] = None
+    ) -> ToolResult:
         """Run a tool and return its result.
+
+        Handlers may be sync or async. Local ones are blocking I/O - files,
+        subprocesses, HTTP - so they run in a worker thread rather than
+        stalling the event loop; MCP handlers are already coroutines and are
+        awaited directly.
 
         Never raises: a tool call comes from a language model, so a bad name,
         missing arguments or a handler blowing up are all routine and the model
@@ -84,7 +93,12 @@ class ToolRegistry:
         logger.info(f"Calling tool {name} with {arguments}")
 
         try:
-            result = spec.handler(**arguments)
+            if inspect.iscoroutinefunction(spec.handler):
+                result = await spec.handler(**arguments)
+            else:
+                result = await asyncio.to_thread(spec.handler, **arguments)
+                if inspect.isawaitable(result):
+                    result = await result
         except TypeError as e:
             # Wrong or missing arguments: tell the model what it got wrong.
             logger.warning(f"Bad arguments for {name}: {e}")

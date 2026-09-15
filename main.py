@@ -1,5 +1,6 @@
 """Main orchestration loop for Jarvis voice assistant."""
 
+import asyncio
 import sys
 import unicodedata
 from loguru import logger
@@ -134,22 +135,24 @@ class Jarvis:
                 return (False, False)
             print(f"Please answer {choices}.")
 
-    def _speak(self, text: str):
+    async def _speak(self, text: str):
         """Say something out loud, falling back to the terminal if TTS fails."""
         try:
-            audio, sample_rate = self.tts.synthesize(text)
+            # Piper is a subprocess and playback blocks; neither belongs on the
+            # event loop.
+            audio, sample_rate = await asyncio.to_thread(self.tts.synthesize, text)
             if len(audio) > 0:
                 # The rate comes from the synthesiser: Piper's *-medium voices
                 # are 22050 Hz but *-low voices are 16000 Hz, and assuming one
                 # of them plays the other at the wrong speed.
-                self.audio.play_audio(audio, sample_rate)
+                await asyncio.to_thread(self.audio.play_audio, audio, sample_rate)
                 return
         except Exception as e:
             logger.error(f"TTS error: {e}")
 
         print(f"Jarvis: {text}")
 
-    def process_user_input(self, user_text: str) -> str:
+    async def process_user_input(self, user_text: str) -> str:
         """
         Process user input through the LLM, executing tools until it stops
         asking for them.
@@ -167,7 +170,7 @@ class Jarvis:
         # keep prompting for the rest of the session.
         self.taint.reset()
 
-        result = self.llm.chat(user_text)
+        result = await self.llm.chat(user_text)
 
         for _ in range(self.llm.MAX_TOOL_ITERATIONS):
             tool_calls = result["tool_calls"]
@@ -179,7 +182,7 @@ class Jarvis:
                 self.tui.update_status(f"Executing {len(tool_calls)} action(s)...")
 
             for tool_call in tool_calls:
-                self._execute_tool_call(tool_call)
+                await self._execute_tool_call(tool_call)
 
             if self.use_tui:
                 self.tui.update_status("Generating response...")
@@ -187,7 +190,7 @@ class Jarvis:
             # No synthetic user turn here: the tool results are the new
             # information, and the follow-up may legitimately ask for more
             # tools, which is why this is a loop rather than one extra call.
-            result = self.llm.continue_after_tools()
+            result = await self.llm.continue_after_tools()
         else:
             if result["tool_calls"]:
                 logger.warning(
@@ -199,7 +202,7 @@ class Jarvis:
 
         return result["response"]
 
-    def _execute_tool_call(self, tool_call: dict) -> ToolResult:
+    async def _execute_tool_call(self, tool_call: dict) -> ToolResult:
         """Run one tool call, subject to policy, and record it everywhere."""
         function = tool_call.get("function", {})
         name = function.get("name", "unknown")
@@ -221,16 +224,18 @@ class Jarvis:
                 logger.info(f"Refused {name}: {decision.reason}")
                 result = ToolResult.error(decision.reason)
             elif decision.needs_confirmation:
-                proceed, remember = self._confirm(decision)
+                # The prompt reads from stdin; keep it off the event loop so a
+                # pending confirmation cannot block everything else.
+                proceed, remember = await asyncio.to_thread(self._confirm, decision)
                 if not proceed:
                     result = ToolResult.error("the user declined this action")
                 else:
                     if remember:
                         self.policy.remember(decision)
-                    result = self.registry.call(name, arguments)
+                    result = await self.registry.call(name, arguments)
             else:
                 logger.info(f"Auto-approved {name}: {decision.reason}")
-                result = self.registry.call(name, arguments)
+                result = await self.registry.call(name, arguments)
 
         # Record before the model sees it: a result from outside the machine
         # raises the bar for whatever it asks for next.
@@ -244,7 +249,7 @@ class Jarvis:
         self.llm.add_tool_result(name, result.content, untrusted=result.untrusted)
         return result
 
-    def run_interactive(self):
+    async def run_interactive(self):
         """Run in interactive voice mode."""
         if not self.use_tui:
             logger.info("\n" + "="*50)
@@ -265,9 +270,10 @@ class Jarvis:
                 
                 # Record audio
                 try:
-                    audio_data = self.audio.record_until_silence(
+                    audio_data = await asyncio.to_thread(
+                        self.audio.record_until_silence,
                         silence_threshold=1.5,
-                        max_duration=30.0
+                        max_duration=30.0,
                     )
                     
                     if len(audio_data) < 1000:  # Too short
@@ -291,7 +297,9 @@ class Jarvis:
                     self.tui.update_status("Transcribing...")
                 
                 try:
-                    user_text = self.stt.transcribe(audio_data, self.audio.sample_rate)
+                    user_text = await asyncio.to_thread(
+                        self.stt.transcribe, audio_data, self.audio.sample_rate
+                    )
                     
                     if not user_text or len(user_text.strip()) < 2:
                         logger.info("No speech detected, try again...")
@@ -324,7 +332,7 @@ class Jarvis:
                         self.tui.add_system_message("Language changed to French")
                         self.tui.update_status("Speaking...")
                     
-                    self._speak(response_text)
+                    await self._speak(response_text)
                     
                     if self.use_tui:
                         self.tui.update_status("Ready")
@@ -341,7 +349,7 @@ class Jarvis:
                         self.tui.add_system_message("Language changed to English")
                         self.tui.update_status("Speaking...")
                     
-                    self._speak(response_text)
+                    await self._speak(response_text)
                     
                     if self.use_tui:
                         self.tui.update_status("Ready")
@@ -357,13 +365,13 @@ class Jarvis:
                         self.tui.update_status("Shutting down...")
                     
                     # Speak goodbye
-                    self._speak(response_text)
+                    await self._speak(response_text)
                     
                     break
                 
                 # Process with LLM and tools
                 try:
-                    response_text = self.process_user_input(user_text)
+                    response_text = await self.process_user_input(user_text)
                     
                     if not response_text:
                         response_text = "I'm not sure how to respond to that."
@@ -378,7 +386,7 @@ class Jarvis:
                     response_text = "I encountered an error processing your request."
                 
                 # Synthesize and speak response
-                self._speak(response_text)
+                await self._speak(response_text)
                 
                 if self.use_tui:
                     self.tui.update_status("Ready")
@@ -392,7 +400,7 @@ class Jarvis:
             if self.use_tui:
                 self.tui.stop()
     
-    def run_text_mode(self):
+    async def run_text_mode(self):
         """Run in text-only mode (no voice I/O)."""
         logger.info("\n" + "="*50)
         logger.info("Jarvis Voice Assistant - Text Mode")
@@ -403,7 +411,7 @@ class Jarvis:
             while True:
                 # Get text input
                 try:
-                    user_text = input("\nYou: ").strip()
+                    user_text = (await asyncio.to_thread(input, "\nYou: ")).strip()
                     
                     if not user_text:
                         continue
@@ -418,7 +426,7 @@ class Jarvis:
                 
                 # Process
                 try:
-                    response_text = self.process_user_input(user_text)
+                    response_text = await self.process_user_input(user_text)
                     print(f"\nJarvis: {response_text}")
                     
                 except Exception as e:
@@ -473,9 +481,9 @@ def main():
         jarvis = Jarvis(use_tui=use_tui)
         
         if mode == "voice":
-            jarvis.run_interactive()
+            asyncio.run(jarvis.run_interactive())
         else:
-            jarvis.run_text_mode()
+            asyncio.run(jarvis.run_text_mode())
             
     except Exception as e:
         logger.error(f"Failed to start Jarvis: {e}")

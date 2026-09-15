@@ -233,8 +233,9 @@ class TestToolSpec:
     def test_an_empty_url_is_refused_up_front(self):
         assert build_tools()[0].precheck({"url": ""})
 
-    def test_dispatch_through_the_registry(self, mocked_responses, public_dns):
+    async def test_dispatch_through_the_registry(self, mocked_responses, public_dns):
         registry = ToolRegistry()
         registry.register_all(build_tools())
         mocked_responses.get("https://example.com", body="<p>hello</p>")
-        assert "hello" in registry.call("web__fetch", {"url": "https://example.com"}).content
+        result = await registry.call("web__fetch", {"url": "https://example.com"})
+        assert "hello" in result.content

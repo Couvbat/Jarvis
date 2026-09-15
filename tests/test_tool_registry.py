@@ -86,7 +86,7 @@ class TestDescribe:
 
 
 class TestCall:
-    def test_calls_the_handler_with_the_arguments(self, registry):
+    async def test_calls_the_handler_with_the_arguments(self, registry):
         seen = {}
 
         def handler(**kwargs):
@@ -94,61 +94,119 @@ class TestCall:
             return ToolResult("done")
 
         registry.register(make_spec(handler=handler))
-        assert registry.call("fs__read", {"path": "/tmp/a"}).content == "done"
+        assert (await registry.call("fs__read", {"path": "/tmp/a"})).content == "done"
         assert seen == {"path": "/tmp/a"}
 
-    def test_no_arguments_is_allowed(self, registry):
+    async def test_no_arguments_is_allowed(self, registry):
         registry.register(make_spec(handler=lambda **kwargs: ToolResult("done")))
-        assert registry.call("fs__read").ok is True
+        assert (await registry.call("fs__read")).ok is True
 
-    def test_an_unknown_tool_is_a_result_not_an_exception(self, registry):
+    async def test_an_unknown_tool_is_a_result_not_an_exception(self, registry):
         """Tool names come from a language model; a wrong one is routine."""
-        result = registry.call("ghost", {})
+        result = await registry.call("ghost", {})
         assert result.ok is False
         assert "unknown tool" in result.content
 
-    def test_wrong_arguments_are_reported_to_the_model(self, registry):
+    async def test_wrong_arguments_are_reported_to_the_model(self, registry):
         def handler(path):
             return ToolResult(path)
 
         registry.register(make_spec(handler=handler))
-        result = registry.call("fs__read", {"wrong_name": "x"})
+        result = await registry.call("fs__read", {"wrong_name": "x"})
         assert result.ok is False
         assert "invalid arguments" in result.content
 
-    def test_missing_required_arguments_are_reported(self, registry):
+    async def test_missing_required_arguments_are_reported(self, registry):
         def handler(path):
             return ToolResult(path)
 
         registry.register(make_spec(handler=handler))
-        assert registry.call("fs__read", {}).ok is False
+        assert (await registry.call("fs__read", {})).ok is False
 
-    def test_a_handler_that_raises_becomes_an_error_result(self, registry):
+    async def test_a_handler_that_raises_becomes_an_error_result(self, registry):
         def handler(**kwargs):
             raise RuntimeError("disk on fire")
 
         registry.register(make_spec(handler=handler))
-        result = registry.call("fs__read", {})
+        result = await registry.call("fs__read", {})
         assert result.ok is False
         assert "disk on fire" in result.content
 
-    def test_a_handler_returning_the_wrong_type_is_caught(self, registry):
+    async def test_a_handler_returning_the_wrong_type_is_caught(self, registry):
         registry.register(make_spec(handler=lambda **kwargs: "just a string"))
-        result = registry.call("fs__read", {})
+        result = await registry.call("fs__read", {})
         assert result.ok is False
         assert "malformed result" in result.content
 
-    def test_the_arguments_mapping_is_not_mutated(self, registry):
+    async def test_the_arguments_mapping_is_not_mutated(self, registry):
         registry.register(make_spec(handler=lambda **kwargs: ToolResult("ok")))
         arguments = {"path": "/tmp/a"}
-        registry.call("fs__read", arguments)
+        await registry.call("fs__read", arguments)
         assert arguments == {"path": "/tmp/a"}
 
-    def test_untrusted_results_survive_dispatch(self, registry):
+    async def test_untrusted_results_survive_dispatch(self, registry):
         registry.register(make_spec(
             handler=lambda **kwargs: ToolResult("page text", untrusted=True)
         ))
-        assert registry.call("fs__read", {}).untrusted is True
+        assert (await registry.call("fs__read", {})).untrusted is True
+
+
+class TestAsyncHandlers:
+    """MCP handlers are coroutines; local ones are blocking I/O."""
+
+    async def test_an_async_handler_is_awaited(self, registry):
+        async def handler(**kwargs):
+            return ToolResult("from a coroutine")
+
+        registry.register(make_spec(handler=handler))
+        assert (await registry.call("fs__read")).content == "from a coroutine"
+
+    async def test_an_async_handler_that_raises_is_caught(self, registry):
+        async def handler(**kwargs):
+            raise RuntimeError("remote server died")
+
+        registry.register(make_spec(handler=handler))
+        result = await registry.call("fs__read")
+        assert result.ok is False
+        assert "remote server died" in result.content
+
+    async def test_wrong_arguments_to_an_async_handler_are_reported(self, registry):
+        async def handler(path):
+            return ToolResult(path)
+
+        registry.register(make_spec(handler=handler))
+        assert (await registry.call("fs__read", {"wrong": 1})).ok is False
+
+    async def test_a_blocking_handler_does_not_stall_the_loop(self, registry):
+        """Local tools block on files, subprocesses and HTTP; they must run
+        off the event loop so Phase 3's barge-in can still be heard."""
+        import asyncio
+        import threading
+
+        loop_thread = threading.get_ident()
+        seen = {}
+
+        def handler(**kwargs):
+            seen["thread"] = threading.get_ident()
+            return ToolResult("ok")
+
+        registry.register(make_spec(handler=handler))
+        await registry.call("fs__read")
+        assert seen["thread"] != loop_thread
+
+    async def test_calls_can_run_concurrently(self, registry):
+        import asyncio
+
+        async def slow(**kwargs):
+            await asyncio.sleep(0.01)
+            return ToolResult("done")
+
+        registry.register(make_spec("a__slow", handler=slow))
+        registry.register(make_spec("b__slow", handler=slow))
+        results = await asyncio.gather(
+            registry.call("a__slow"), registry.call("b__slow")
+        )
+        assert [r.content for r in results] == ["done", "done"]
 
 
 class TestRiskIsVisibleToCallers:

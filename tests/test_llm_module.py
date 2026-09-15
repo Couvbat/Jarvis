@@ -157,6 +157,14 @@ class TestLLMModuleSetup:
         assert module.model == "mistral:7b"
         assert module.temperature == pytest.approx(0.1)
 
+    def test_the_configured_host_reaches_the_client(self, settings, fake_ollama):
+        """OLLAMA_HOST was read into settings and then never used: the
+        module-level ollama.chat() builds its own client from the process
+        environment, so pointing .env at another machine did nothing."""
+        settings.ollama_host = "http://otherbox:11434"
+        LLMModule()
+        assert fake_ollama.hosts == ["http://otherbox:11434"]
+
     def test_no_registry_means_no_tools(self):
         """Tests and text-only flows can run the model without any tools."""
         assert LLMModule().available_tools() == []
@@ -179,45 +187,45 @@ class TestLLMModuleSetup:
 
 
 class TestChat:
-    def test_returns_plain_content(self, fake_ollama):
+    async def test_returns_plain_content(self, fake_ollama):
         fake_ollama.responses.append(make_chat_response("Bonjour"))
-        result = LLMModule().chat("salut")
+        result = await LLMModule().chat("salut")
         assert result["response"] == "Bonjour"
         assert result["tool_calls"] is None
 
-    def test_sends_model_tools_and_options(self, fake_ollama, settings):
+    async def test_sends_model_tools_and_options(self, fake_ollama, settings):
         settings.ollama_model = "llama3.1:8b"
         fake_ollama.responses.append(make_chat_response("ok"))
         registry = make_registry("fs__read")
-        LLMModule(registry).chat("hello")
+        await LLMModule(registry).chat("hello")
         call = fake_ollama.calls[0]
         assert call["model"] == "llama3.1:8b"
         assert call["tools"] == registry.describe()
         assert call["options"]["temperature"] == pytest.approx(settings.llm_temperature)
         assert call["options"]["num_predict"] == settings.llm_max_tokens
 
-    def test_sends_the_full_history(self, fake_ollama):
+    async def test_sends_the_full_history(self, fake_ollama):
         fake_ollama.responses.extend([
             make_chat_response("one"), make_chat_response("two"),
         ])
         module = LLMModule()
-        module.chat("first")
-        module.chat("second")
+        await module.chat("first")
+        await module.chat("second")
         roles = [m["role"] for m in fake_ollama.calls[1]["messages"]]
         assert roles == ["system", "user", "assistant", "user"]
 
-    def test_records_both_turns_in_history(self, fake_ollama):
+    async def test_records_both_turns_in_history(self, fake_ollama):
         fake_ollama.responses.append(make_chat_response("Bonjour"))
         module = LLMModule()
-        module.chat("salut")
+        await module.chat("salut")
         messages = module.history.get_messages()
         assert messages[-2] == {"role": "user", "content": "salut"}
         assert messages[-1] == {"role": "assistant", "content": "Bonjour"}
 
-    def test_returns_tool_calls_as_plain_data(self, fake_ollama):
+    async def test_returns_tool_calls_as_plain_data(self, fake_ollama):
         call = make_tool_call("fetch_web_page", {"url": "https://example.com"})
         fake_ollama.responses.append(make_chat_response("on it", [call]))
-        result = LLMModule().chat("read example.com")
+        result = await LLMModule().chat("read example.com")
         assert result["tool_calls"] == [{
             "function": {
                 "name": "fetch_web_page",
@@ -225,75 +233,75 @@ class TestChat:
             }
         }]
 
-    def test_transport_error_is_converted_to_a_message(self, fake_ollama):
+    async def test_transport_error_is_converted_to_a_message(self, fake_ollama):
         fake_ollama.error = ConnectionError("ollama is down")
-        result = LLMModule().chat("hello")
+        result = await LLMModule().chat("hello")
         assert "error" in result["response"].lower()
         assert result["tool_calls"] is None
 
-    def test_transport_error_still_records_a_turn(self, fake_ollama):
+    async def test_transport_error_still_records_a_turn(self, fake_ollama):
         fake_ollama.error = ConnectionError("ollama is down")
         module = LLMModule()
-        module.chat("hello")
+        await module.chat("hello")
         assert module.history.get_messages()[-1]["role"] == "assistant"
 
-    def test_missing_message_key_does_not_raise(self, fake_ollama):
+    async def test_missing_message_key_does_not_raise(self, fake_ollama):
         fake_ollama.responses.append({})
-        result = LLMModule().chat("hello")
+        result = await LLMModule().chat("hello")
         assert result["response"] == ""
 
-    def test_empty_tool_call_list_is_normalised_to_none(self, fake_ollama):
+    async def test_empty_tool_call_list_is_normalised_to_none(self, fake_ollama):
         fake_ollama.responses.append(make_chat_response("hi", []))
-        assert LLMModule().chat("hello")["tool_calls"] is None
+        assert (await LLMModule().chat("hello"))["tool_calls"] is None
 
 
 class TestContinueAfterTools:
-    def test_appends_no_message_of_its_own(self, fake_ollama):
+    async def test_appends_no_message_of_its_own(self, fake_ollama):
         """The tool results are the new information; a synthetic user turn
         would pollute the conversation and pin the reply to its language."""
         fake_ollama.responses.extend([
             make_chat_response("hi"), make_chat_response("done"),
         ])
         module = LLMModule()
-        module.chat("bonjour")
+        await module.chat("bonjour")
         module.add_tool_result("fetch_web_page", "content")
 
         before = len(module.history.get_messages())
-        module.continue_after_tools()
+        await module.continue_after_tools()
         after = module.history.get_messages()
 
         assert len(after) == before + 1          # only the assistant reply
         assert after[-1]["role"] == "assistant"
         assert all(message["role"] != "user" for message in after[before:])
 
-    def test_sends_the_tool_result_to_the_model(self, fake_ollama):
+    async def test_sends_the_tool_result_to_the_model(self, fake_ollama):
         fake_ollama.responses.extend([
             make_chat_response("hi"), make_chat_response("done"),
         ])
         module = LLMModule()
-        module.chat("bonjour")
+        await module.chat("bonjour")
         module.add_tool_result("fetch_web_page", "the page said hello")
-        module.continue_after_tools()
+        await module.continue_after_tools()
 
         sent = fake_ollama.calls[-1]["messages"]
         assert any(message["role"] == "tool"
                    and message["content"] == "the page said hello"
                    for message in sent)
 
-    def test_can_itself_ask_for_more_tools(self, fake_ollama):
+    async def test_can_itself_ask_for_more_tools(self, fake_ollama):
         """A follow-up turn is a normal turn: it may return tool calls too."""
         call = make_tool_call("fetch_web_page", {"url": "https://example.com"})
         fake_ollama.responses.extend([
             make_chat_response("hi"), make_chat_response("", [call]),
         ])
         module = LLMModule()
-        module.chat("bonjour")
-        assert module.continue_after_tools()["tool_calls"] is not None
+        await module.chat("bonjour")
+        assert (await module.continue_after_tools())["tool_calls"] is not None
 
-    def test_a_transport_error_is_converted_to_a_message(self, fake_ollama):
+    async def test_a_transport_error_is_converted_to_a_message(self, fake_ollama):
         module = LLMModule()
         fake_ollama.error = ConnectionError("ollama is down")
-        assert "error" in module.continue_after_tools()["response"].lower()
+        assert "error" in (await module.continue_after_tools())["response"].lower()
 
 
 class TestUntrustedContent:
@@ -323,10 +331,10 @@ class TestToolResults:
             "name": "fetch_web_page",
         }
 
-    def test_reset_drops_the_conversation(self, fake_ollama):
+    async def test_reset_drops_the_conversation(self, fake_ollama):
         fake_ollama.responses.append(make_chat_response("hi"))
         module = LLMModule()
-        module.chat("hello")
+        await module.chat("hello")
         module.reset_conversation()
         assert all(m["role"] == "system" for m in module.history.get_messages())
 
@@ -335,7 +343,7 @@ class TestToolResults:
 # Known gaps
 # --------------------------------------------------------------------------- #
 
-def test_tool_call_without_content_survives_history_recording(fake_ollama):
+async def test_tool_call_without_content_survives_history_recording(fake_ollama):
     """A tool call with no prose is the normal case, and must not break chat().
 
     The client returns pydantic models, which are not JSON-serialisable; the
@@ -343,7 +351,7 @@ def test_tool_call_without_content_survives_history_recording(fake_ollama):
     """
     call = make_tool_call("fetch_web_page", {"url": "https://example.com"})
     fake_ollama.responses.append(make_chat_response("", [call]))
-    result = LLMModule().chat("read example.com")
+    result = await LLMModule().chat("read example.com")
     assert result["tool_calls"] == [{
         "function": {
             "name": "fetch_web_page",
@@ -352,7 +360,7 @@ def test_tool_call_without_content_survives_history_recording(fake_ollama):
     }]
 
 
-def test_tool_calls_are_replayed_in_the_protocol_shape(fake_ollama):
+async def test_tool_calls_are_replayed_in_the_protocol_shape(fake_ollama):
     """Ollama expects ``{"role": "assistant", "tool_calls": [...]}`` followed by
     ``{"role": "tool", "content": ...}``.  Jarvis flattens both into strings, so
     the model cannot correlate a result with the call that produced it."""
@@ -361,17 +369,17 @@ def test_tool_calls_are_replayed_in_the_protocol_shape(fake_ollama):
         make_chat_response("", [call], as_model=False), make_chat_response("done"),
     ])
     module = LLMModule()
-    module.chat("read example.com")
+    await module.chat("read example.com")
     module.add_tool_result("fetch_web_page", "content")
-    module.chat("summarise")
+    await module.chat("summarise")
     replayed = fake_ollama.calls[-1]["messages"]
     assert any(m.get("tool_calls") for m in replayed)
 
 
-def test_reset_conversation_keeps_exactly_one_system_prompt(fake_ollama):
+async def test_reset_conversation_keeps_exactly_one_system_prompt(fake_ollama):
     fake_ollama.responses.append(make_chat_response("hi"))
     module = LLMModule()
-    module.chat("hello")
+    await module.chat("hello")
     module.reset_conversation()
     module.reset_conversation()
     assert len(module.history.get_messages()) == 1

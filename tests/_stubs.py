@@ -273,12 +273,34 @@ def make_tool_call(name: str, arguments: Optional[dict] = None,
                                                arguments=arguments or {}))
 
 
+class _AsyncClient:
+    """Stand-in for ``ollama.AsyncClient``.
+
+    Records the host it was built with, so a test can check that the
+    configured OLLAMA_HOST actually reaches the client.
+    """
+
+    def __init__(self, host: Optional[str] = None, **kwargs: Any):
+        self.host = host
+        _OLLAMA_MODULE["instance"].hosts.append(host)
+
+    async def chat(self, **kwargs: Any) -> Any:
+        return _OLLAMA_MODULE["instance"].chat(**kwargs)
+
+
+#: Lets _AsyncClient reach the module object that owns the scripted responses.
+_OLLAMA_MODULE: dict = {}
+
+
 class _OllamaModule(types.ModuleType):
     def __init__(self) -> None:
         super().__init__("ollama")
         self.calls: List[dict] = []
         self.responses: List[Any] = []
+        self.hosts: List[Optional[str]] = []
         self.error: Optional[Exception] = None
+        self.AsyncClient = _AsyncClient
+        _OLLAMA_MODULE["instance"] = self
 
     def chat(self, **kwargs: Any) -> Any:
         # The real client serialises the payload immediately; snapshot the
@@ -300,6 +322,7 @@ class _OllamaModule(types.ModuleType):
     def reset(self) -> None:
         self.calls.clear()
         self.responses.clear()
+        self.hosts.clear()
         self.error = None
 
 

@@ -126,13 +126,17 @@ speak English."""
     def __init__(self, registry: Optional[ToolRegistry] = None):
         self.registry = registry
         self.host = settings.ollama_host
+        # An explicit client, so OLLAMA_HOST from .env is actually honoured.
+        # The module-level ollama.chat() uses a default client that only reads
+        # the process environment, so the setting was silently ignored.
+        self.client = ollama.AsyncClient(host=self.host)
         self.model = settings.ollama_model
         self.temperature = settings.llm_temperature
         self.max_tokens = settings.llm_max_tokens
         self.history = ConversationHistory(settings.max_conversation_history)
         self.history.set_system(self.SYSTEM_PROMPT)
 
-    def chat(self, user_message: str) -> Dict[str, Any]:
+    async def chat(self, user_message: str) -> Dict[str, Any]:
         """
         Send a user message to the LLM and get its reply.
 
@@ -144,9 +148,9 @@ speak English."""
         """
         logger.info(f"User: {user_message}")
         self.history.add_user(user_message)
-        return self._generate()
+        return await self._generate()
 
-    def continue_after_tools(self) -> Dict[str, Any]:
+    async def continue_after_tools(self) -> Dict[str, Any]:
         """
         Ask the model to carry on from the tool results already in history.
 
@@ -156,12 +160,12 @@ speak English."""
         written in.
         """
         logger.info("Continuing after tool results")
-        return self._generate()
+        return await self._generate()
 
-    def _generate(self) -> Dict[str, Any]:
+    async def _generate(self) -> Dict[str, Any]:
         """Run one model turn against the current history."""
         try:
-            response = ollama.chat(
+            response = await self.client.chat(
                 model=self.model,
                 messages=self.history.get_messages(),
                 tools=self.available_tools(),

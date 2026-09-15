@@ -235,10 +235,10 @@ class TestToolSpec:
     def test_an_unparseable_command_is_refused_up_front(self, on_path):
         assert build_tools(["ls"])[0].precheck({"application": 'ls "unclosed'})
 
-    def test_dispatch_through_the_registry(self, on_path, run_calls):
+    async def test_dispatch_through_the_registry(self, on_path, run_calls):
         registry = ToolRegistry()
         registry.register_all(build_tools(["ls"]))
-        assert registry.call("app__launch", {"application": "ls"}).ok is True
+        assert (await registry.call("app__launch", {"application": "ls"})).ok is True
 
 
 class TestApprovalScope:
