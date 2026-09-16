@@ -2,10 +2,10 @@
 
 import pytest
 
-from text_utils import expand, normalise, strip_accents, tokenise
-from tools.registry import ToolRegistry
-from tools.schema import Risk, ToolResult, ToolSpec
-from tools.selection import ToolSelector, estimate_schema_tokens
+from jarvis.text_utils import expand, normalise, strip_accents, tokenise
+from jarvis.tools.registry import ToolRegistry
+from jarvis.tools.schema import Risk, ToolResult, ToolSpec
+from jarvis.tools.selection import ToolSelector, estimate_schema_tokens
 
 
 def make_spec(name, description="does something", properties=None):
@@ -79,7 +79,7 @@ class TestTextHelpers:
         import ast
         import inspect
 
-        import text_utils
+        import jarvis.text_utils as text_utils
 
         assert "url" in text_utils.TERM_ALIASES["site"]
 

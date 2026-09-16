@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from policy.paths import PathPolicy, PathVerdict
+from jarvis.policy.paths import PathPolicy, PathVerdict
 
 
 @pytest.fixture
@@ -155,13 +155,13 @@ class TestFromSettings:
 
     def test_defaults_do_not_include_the_whole_home_tree(self, clean_env):
         """Allowing "/home" would put every household dotfile in the sandbox."""
-        from config import Settings
+        from jarvis.config import Settings
 
         fresh = Settings(_env_file=None)
         assert Path("/home") not in fresh.allowed_dirs_list
 
     def test_credentials_are_denied_by_default(self, clean_env):
-        from config import Settings
+        from jarvis.config import Settings
 
         patterns = Settings(_env_file=None).denied_patterns_list
         for expected in (".ssh", ".aws", ".env", "*_history"):

@@ -23,7 +23,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from config import settings
+from jarvis.config import settings
 
 
 @dataclass(frozen=True)

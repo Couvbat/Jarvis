@@ -15,9 +15,9 @@ from typing import Any
 
 from loguru import logger
 
-from policy.store import ApprovalStore
-from policy.taint import TaintState
-from tools.schema import Risk, ToolSpec
+from jarvis.policy.store import ApprovalStore
+from jarvis.policy.taint import TaintState
+from jarvis.tools.schema import Risk, ToolSpec
 
 #: Arguments longer than this are trimmed in the confirmation summary.
 MAX_SUMMARY_VALUE = 80

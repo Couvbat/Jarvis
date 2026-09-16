@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 
-from tools.schema import ToolResult
+from jarvis.tools.schema import ToolResult
 
 
 @dataclass

@@ -19,8 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from policy.paths import PathPolicy
-from tools.schema import Risk, ToolResult, ToolSpec, namespaced
+from jarvis.policy.paths import PathPolicy
+from jarvis.tools.schema import Risk, ToolResult, ToolSpec, namespaced
 
 NAMESPACE = "fs"
 

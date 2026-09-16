@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import pytest
 
-from policy.paths import PathPolicy
+from jarvis.policy.paths import PathPolicy
+from jarvis.tools.local import apps, filesystem, web
+from jarvis.tools.registry import ToolRegistry
+from jarvis.tools.schema import Risk, ToolResult, ToolSpec
+from jarvis.tools.selection import ToolSelector
 from tests.eval.cases import CASES, EXTRA_TOOLS
-from tools.local import apps, filesystem, web
-from tools.registry import ToolRegistry
-from tools.schema import Risk, ToolResult, ToolSpec
-from tools.selection import ToolSelector
 
 #: Floors, not targets. They exist to catch a regression in selection, so they
 #: sit a little below what the current implementation achieves.
@@ -94,7 +94,7 @@ def test_both_languages_are_served(registry):
 
 
 def test_selection_is_cheaper_than_offering_everything(registry):
-    from tools.selection import estimate_schema_tokens
+    from jarvis.tools.selection import estimate_schema_tokens
 
     everything = estimate_schema_tokens(registry.describe())
     selected = estimate_schema_tokens(

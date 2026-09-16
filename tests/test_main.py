@@ -6,12 +6,12 @@ import builtins
 import numpy as np
 import pytest
 
-import main as main_module
-from main import Jarvis, is_exit_command, normalise_utterance
-from policy.engine import Decision, Surface
-from policy.store import ApprovalStore
-from tools.registry import ToolRegistry
-from tools.schema import Risk, ToolResult, ToolSpec
+import jarvis.main as main_module
+from jarvis.main import Jarvis, is_exit_command, normalise_utterance
+from jarvis.policy.engine import Decision, Surface
+from jarvis.policy.store import ApprovalStore
+from jarvis.tools.registry import ToolRegistry
+from jarvis.tools.schema import Risk, ToolResult, ToolSpec
 
 
 class FakeAudio:
@@ -62,7 +62,7 @@ class FakeLLM:
     async def status(self):
         """Mirrors LLMModule.status(): the provider that will answer, if any,
         and what every configured provider reported."""
-        from llm_providers import ProviderConfig
+        from jarvis.llm_providers import ProviderConfig
 
         report = {}
         if not self.available:

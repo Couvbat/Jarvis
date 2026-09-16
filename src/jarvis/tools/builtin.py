@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from loguru import logger
 
-from config import settings
-from policy.paths import PathPolicy
-from tools.local import apps, filesystem, web
-from tools.mcp.adapter import build_specs
-from tools.mcp.manager import McpManager
-from tools.mcp.servers import load_servers
-from tools.registry import DuplicateToolError, ToolRegistry
+from jarvis.config import settings
+from jarvis.policy.paths import PathPolicy
+from jarvis.tools.local import apps, filesystem, web
+from jarvis.tools.mcp.adapter import build_specs
+from jarvis.tools.mcp.manager import McpManager
+from jarvis.tools.mcp.servers import load_servers
+from jarvis.tools.registry import DuplicateToolError, ToolRegistry
 
 
 def build_default_registry(path_policy: PathPolicy | None = None) -> ToolRegistry:

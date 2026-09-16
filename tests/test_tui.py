@@ -5,9 +5,9 @@ import io
 import pytest
 from rich.console import Console
 
-from policy.engine import Decision, Surface
-from tools.schema import Risk
-from tui import JarvisTUI
+from jarvis.policy.engine import Decision, Surface
+from jarvis.tools.schema import Risk
+from jarvis.tui import JarvisTUI
 
 
 def make_decision(surface=Surface.VOICE, risk=Risk.WRITE):
@@ -222,7 +222,7 @@ class TestLifecycle:
             def update(self_inner, layout):
                 started.append("update")
 
-        monkeypatch.setattr("tui.Live", FakeLive)
+        monkeypatch.setattr("jarvis.tui.Live", FakeLive)
         tui.start()
         tui.refresh()
         tui.stop()

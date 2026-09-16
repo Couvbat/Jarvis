@@ -2,8 +2,8 @@
 
 import pytest
 
-from tools.registry import DuplicateToolError, ToolRegistry
-from tools.schema import Risk, ToolResult, ToolSpec
+from jarvis.tools.registry import DuplicateToolError, ToolRegistry
+from jarvis.tools.schema import Risk, ToolResult, ToolSpec
 
 
 def make_spec(name="fs__read", handler=None, **overrides):

@@ -22,7 +22,7 @@ import numpy as np
 import sounddevice as sd
 from loguru import logger
 
-from audio_handler import VAD_FRAME_MS, AudioHandler
+from jarvis.audio_handler import VAD_FRAME_MS, AudioHandler
 
 #: Consecutive speech frames before this counts as the user talking.
 DEFAULT_MIN_SPEECH_FRAMES = 10  # 200 ms at 20 ms frames

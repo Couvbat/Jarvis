@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-import setup_piper
-from setup_piper import (
+import jarvis.setup_piper as setup_piper
+from jarvis.setup_piper import (
     BINARIES,
     DEFAULT_VOICE,
     VOICES,
@@ -18,7 +18,7 @@ from setup_piper import (
     fetch_verified,
     sha256_of,
 )
-from setup_piper import (
+from jarvis.setup_piper import (
     setup_piper as install,
 )
 

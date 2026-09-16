@@ -9,7 +9,7 @@ import numpy as np
 import soundfile as sf
 from loguru import logger
 
-from config import settings
+from jarvis.config import settings
 
 #: Used until a voice config or a synthesised file says otherwise. Piper's
 #: *-medium voices are 22050 Hz, but *-low voices are 16000 Hz.

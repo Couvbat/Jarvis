@@ -26,8 +26,8 @@ from mcp.client.session_group import (
     StreamableHttpParameters,
 )
 
-from tools.mcp.servers import ServerConfig, Transport
-from tools.schema import NAMESPACE_SEPARATOR, ToolResult
+from jarvis.tools.mcp.servers import ServerConfig, Transport
+from jarvis.tools.schema import NAMESPACE_SEPARATOR, ToolResult
 
 #: Seconds to wait for a server to connect and list its tools.
 DEFAULT_CONNECT_TIMEOUT = 15.0

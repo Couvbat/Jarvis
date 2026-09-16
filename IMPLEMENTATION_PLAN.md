@@ -250,7 +250,7 @@ faire deux fois.
   qui ne répond pas ne doit pas empêcher Jarvis de fonctionner avec les
   autres. Démarrage en parallèle avec délai d'attente, journalisation claire,
   reconnexion à la demande.
-- `mcp>=2.2,<3` dans `requirements.txt`.
+- `mcp>=2.2,<3` dans les dépendances (aujourd'hui `pyproject.toml`).
 
 ### 2.3 — Intégration au registre et à la politique · 1 j
 

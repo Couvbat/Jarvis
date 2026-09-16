@@ -6,7 +6,7 @@ import numpy as np
 from faster_whisper import WhisperModel
 from loguru import logger
 
-from config import settings
+from jarvis.config import settings
 
 
 class STTModule:

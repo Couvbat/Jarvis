@@ -2,8 +2,8 @@
 
 import pytest
 
-from conversation_store import ConversationStore
-from llm_module import ConversationHistory, LLMModule
+from jarvis.conversation_store import ConversationStore
+from jarvis.llm_module import ConversationHistory, LLMModule
 from tests._stubs import make_chat_response, make_tool_call
 
 

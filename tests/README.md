@@ -2,12 +2,19 @@
 
 ```bash
 pip install -r ../requirements-test.txt
-pytest                                  # ~1,2 s
+pytest                                  # ~7 s
 pytest --cov --cov-report=term-missing
 pytest tests/test_llm_module.py -v      # un module
-pytest -k "whitelist"                   # par mot-clé
+pytest -k "provider"                    # par mot-clé
 pytest -rx                              # détail des xfail (= bugs connus)
 ```
+
+Le paquet vit sous `src/jarvis/`. Une copie installée (`pip install -e .`)
+l'emporte, pour que ce soit bien le paquet qui soit testé ; sinon `conftest.py`
+ajoute `src/` au chemin, de sorte que `pytest` fonctionne dans un dépôt
+fraîchement cloné — ce qui compte ici plus qu'ailleurs, puisque les vraies
+dépendances de Jarvis exigent PortAudio et un compilateur C, et que la suite
+n'a besoin ni de l'un ni de l'autre.
 
 ## Aucune dépendance native requise
 

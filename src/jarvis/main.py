@@ -6,22 +6,22 @@ import sys
 
 from loguru import logger
 
-from audio_handler import AudioHandler
-from config import settings
-from conversation_store import ConversationStore
-from llm_module import LLMModule
-from policy.engine import PolicyEngine, Surface
-from policy.store import ApprovalStore
-from policy.taint import TaintState
-from speech.barge_in import VAD_FRAME_MS, BargeInListener
-from speech.chunker import SentenceChunker
-from speech.pipeline import SpeechPipeline
-from stt_module import STTModule
-from text_utils import normalise
-from tools.builtin import attach_mcp_tools, build_default_registry, build_mcp_manager
-from tools.schema import ToolResult
-from tts_module import TTSModule
-from tui import JarvisTUI
+from jarvis.audio_handler import AudioHandler
+from jarvis.config import settings
+from jarvis.conversation_store import ConversationStore
+from jarvis.llm_module import LLMModule
+from jarvis.policy.engine import PolicyEngine, Surface
+from jarvis.policy.store import ApprovalStore
+from jarvis.policy.taint import TaintState
+from jarvis.speech.barge_in import VAD_FRAME_MS, BargeInListener
+from jarvis.speech.chunker import SentenceChunker
+from jarvis.speech.pipeline import SpeechPipeline
+from jarvis.stt_module import STTModule
+from jarvis.text_utils import normalise
+from jarvis.tools.builtin import attach_mcp_tools, build_default_registry, build_mcp_manager
+from jarvis.tools.schema import ToolResult
+from jarvis.tts_module import TTSModule
+from jarvis.tui import JarvisTUI
 
 #: Utterances that end the session. Matched against the whole normalised
 #: utterance, never as a substring: "stop" appears in plenty of requests that

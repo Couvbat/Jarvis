@@ -13,7 +13,7 @@ from typing import Any
 
 from loguru import logger
 
-from tools.schema import ToolResult, ToolSpec, to_ollama_schema
+from jarvis.tools.schema import ToolResult, ToolSpec, to_ollama_schema
 
 
 class DuplicateToolError(ValueError):

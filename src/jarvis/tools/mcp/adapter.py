@@ -13,8 +13,8 @@ from typing import Any
 
 from loguru import logger
 
-from tools.mcp.servers import Trust
-from tools.schema import Risk, ToolResult, ToolSpec, from_mcp_tool
+from jarvis.tools.mcp.servers import Trust
+from jarvis.tools.schema import Risk, ToolResult, ToolSpec, from_mcp_tool
 
 
 def _hint(tool: Any, name: str) -> bool:

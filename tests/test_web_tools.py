@@ -4,9 +4,9 @@ import pytest
 import requests
 import responses
 
-from tools.local.web import WebTools, build_tools
-from tools.registry import ToolRegistry
-from tools.schema import Risk
+from jarvis.tools.local.web import WebTools, build_tools
+from jarvis.tools.registry import ToolRegistry
+from jarvis.tools.schema import Risk
 
 
 @pytest.fixture
@@ -26,7 +26,7 @@ def public_dns(monkeypatch):
         }
         return [(2, 1, 6, "", (mapping.get(host, "93.184.216.34"), 0))]
 
-    monkeypatch.setattr("tools.local.web.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("jarvis.tools.local.web.socket.getaddrinfo", fake_getaddrinfo)
 
 
 @pytest.fixture
@@ -121,7 +121,7 @@ class TestSsrfGuard:
         def resolve_literally(host, port, *args, **kwargs):
             return [(2, 1, 6, "", (host.strip("[]"), 0))]
 
-        monkeypatch.setattr("tools.local.web.socket.getaddrinfo", resolve_literally)
+        monkeypatch.setattr("jarvis.tools.local.web.socket.getaddrinfo", resolve_literally)
         assert WebTools().fetch(literal).ok is False
 
     def test_the_guard_can_be_turned_off_deliberately(self, mocked_responses, public_dns):
@@ -135,7 +135,7 @@ class TestSsrfGuard:
         def fail(host, port, *args, **kwargs):
             raise real_socket.gaierror("no such host")
 
-        monkeypatch.setattr("tools.local.web.socket.getaddrinfo", fail)
+        monkeypatch.setattr("jarvis.tools.local.web.socket.getaddrinfo", fail)
         assert "could not resolve" in WebTools().fetch("https://nope.invalid").content
 
 

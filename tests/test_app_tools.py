@@ -4,10 +4,10 @@ import subprocess
 
 import pytest
 
-from tools.local import apps as apps_module
-from tools.local.apps import AppTools, build_tools
-from tools.registry import ToolRegistry
-from tools.schema import Risk
+from jarvis.tools.local import apps as apps_module
+from jarvis.tools.local.apps import AppTools, build_tools
+from jarvis.tools.registry import ToolRegistry
+from jarvis.tools.schema import Risk
 
 
 class FakeCompleted:
@@ -263,7 +263,7 @@ class TestDefaults:
     def test_the_default_whitelist_holds_no_file_manipulation_tools(self, clean_env):
         """rm, cat, mkdir and touch reach the whole disk: they never pass
         through the path sandbox, so they do not belong in the default."""
-        from config import Settings
+        from jarvis.config import Settings
 
         whitelist = Settings(_env_file=None).command_whitelist_list
         for dangerous in ("rm", "cat", "mkdir", "touch", "ls"):

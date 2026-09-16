@@ -24,7 +24,7 @@ from typing import Any
 import ollama
 from loguru import logger
 
-from config import settings
+from jarvis.config import settings
 
 
 @dataclass(frozen=True)

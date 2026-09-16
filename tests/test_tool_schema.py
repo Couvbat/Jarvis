@@ -1,7 +1,7 @@
 """Tests for tool descriptions and schema conversion (tools/schema.py)."""
 
 
-from tools.schema import (
+from jarvis.tools.schema import (
     NAMESPACE_SEPARATOR,
     Risk,
     ToolResult,

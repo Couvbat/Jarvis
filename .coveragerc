@@ -1,9 +1,9 @@
 [run]
-source = .
+# The package, not the checkout: an editable install and a bare checkout then
+# report the same files, so the number does not move with how it was run.
+source_pkgs = jarvis
 omit =
-    tests/*
-    venv/*
-    setup_piper.py
+    */setup_piper.py
 
 [report]
 exclude_lines =

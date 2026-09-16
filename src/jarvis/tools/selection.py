@@ -24,9 +24,9 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 
-from text_utils import expand, tokenise
-from tools.registry import ToolRegistry
-from tools.schema import ToolSpec
+from jarvis.text_utils import expand, tokenise
+from jarvis.tools.registry import ToolRegistry
+from jarvis.tools.schema import ToolSpec
 
 #: A name match says far more than a description match.
 NAME_WEIGHT = 3.0

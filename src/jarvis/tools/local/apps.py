@@ -19,7 +19,7 @@ from typing import Any
 
 from loguru import logger
 
-from tools.schema import Risk, ToolResult, ToolSpec, namespaced
+from jarvis.tools.schema import Risk, ToolResult, ToolSpec, namespaced
 
 NAMESPACE = "app"
 

@@ -255,10 +255,10 @@ def main() -> int:
         return 1
 
     print("\nNext steps:")
-    print("1. Install Python dependencies: pip install -r requirements.txt")
+    print("1. Install Jarvis: pip install -e .")
     print("2. Set up Ollama: https://ollama.ai/download")
     print("3. Copy .env.example to .env and configure")
-    print("4. Run: python main.py")
+    print("4. Run: jarvis")
     return 0
 
 

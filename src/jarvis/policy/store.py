@@ -15,7 +15,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from tools.schema import Risk
+from jarvis.tools.schema import Risk
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS approvals (

@@ -2,11 +2,11 @@
 
 import pytest
 
-from llm_module import ConversationHistory, LLMModule
-from llm_providers import ProviderConfig, ProviderPool
+from jarvis.llm_module import ConversationHistory, LLMModule
+from jarvis.llm_providers import ProviderConfig, ProviderPool
+from jarvis.tools.registry import ToolRegistry
+from jarvis.tools.schema import Risk, ToolResult, ToolSpec
 from tests._stubs import make_chat_response, make_tool_call
-from tools.registry import ToolRegistry
-from tools.schema import Risk, ToolResult, ToolSpec
 
 
 @pytest.fixture
@@ -201,7 +201,7 @@ class TestLLMModuleSetup:
 
 class TestToolSelection:
     def make_registry(self, count):
-        from tools.schema import Risk, ToolResult, ToolSpec
+        from jarvis.tools.schema import Risk, ToolResult, ToolSpec
 
         registry = ToolRegistry()
         for index in range(count):
@@ -227,7 +227,7 @@ class TestToolSelection:
         assert len(module.available_tools()) == 4
 
     async def test_the_utterance_drives_the_shortlist(self, settings, fake_ollama):
-        from tools.schema import Risk, ToolResult, ToolSpec
+        from jarvis.tools.schema import Risk, ToolResult, ToolSpec
 
         settings.tool_selection_threshold = 3
         settings.tool_selection_top_k = 2

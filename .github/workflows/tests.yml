@@ -28,6 +28,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-test.txt
 
+      - name: Install Jarvis itself, without its dependencies
+        # So the suite imports the installed package rather than the source
+        # tree - which is what a user gets, and what src/ layout is for.
+        run: pip install -e . --no-deps
+
       - name: Run tests
         run: pytest --cov --cov-report=term-missing --cov-report=xml
 
@@ -47,3 +52,22 @@ jobs:
           python-version: "3.11"
       - run: pip install ruff
       - run: ruff check .
+
+  package:
+    # A wheel that is missing a subpackage still passes the tests above,
+    # because those can fall back to the source tree. This job cannot.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install build
+      - run: python -m build
+      - name: Install the wheel and check what it contains
+        run: |
+          pip install dist/*.whl --no-deps
+          python -c "import jarvis; print(jarvis.__version__)"
+          python -c "import jarvis.tools.mcp.manager, jarvis.policy.engine, jarvis.speech.pipeline"
+          test -x "$(command -v jarvis)"
+          test -x "$(command -v jarvis-setup-piper)"

@@ -7,7 +7,7 @@ import soundfile as sf
 import webrtcvad
 from loguru import logger
 
-from config import settings
+from jarvis.config import settings
 
 # webrtcvad only accepts frames of exactly 10, 20 or 30 ms of 16-bit mono PCM.
 # The capture block size is a separate concern (latency vs. syscall overhead),

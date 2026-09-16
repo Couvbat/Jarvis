@@ -5,11 +5,11 @@ from typing import Any
 
 from loguru import logger
 
-from config import settings
-from conversation_store import ConversationStore
-from llm_providers import ProviderConfig, ProviderPool
-from tools.registry import ToolRegistry
-from tools.selection import ToolSelector, estimate_schema_tokens
+from jarvis.config import settings
+from jarvis.conversation_store import ConversationStore
+from jarvis.llm_providers import ProviderConfig, ProviderPool
+from jarvis.tools.registry import ToolRegistry
+from jarvis.tools.selection import ToolSelector, estimate_schema_tokens
 
 
 def to_plain(value: Any) -> Any:
