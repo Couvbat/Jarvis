@@ -49,8 +49,8 @@ def _as_int(value: Any, default: int, name: str) -> int:
         raise ValueError(f"{name} must be a number, got a boolean")
     try:
         return int(value)
-    except (TypeError, ValueError):
-        raise ValueError(f"{name} must be a number, got {value!r}")
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"{name} must be a number, got {value!r}") from e
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:

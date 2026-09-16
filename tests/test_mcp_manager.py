@@ -244,8 +244,6 @@ class TestManager:
         good = self.config("good")
         bad = ServerConfig("bad", Transport.STDIO, command="definitely-not-real-xyz")
 
-        real_connect = None
-
         manager = McpManager([good, bad], connect_timeout=5.0)
 
         async def connect(self_group, params, session_params=None):

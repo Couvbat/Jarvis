@@ -171,9 +171,9 @@ class TTSModule:
 
             return audio_data, sample_rate
 
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
             logger.error("Piper synthesis timed out")
-            raise RuntimeError("TTS synthesis timed out")
+            raise RuntimeError("TTS synthesis timed out") from e
         except Exception as e:
             logger.error(f"TTS error: {e}")
             raise

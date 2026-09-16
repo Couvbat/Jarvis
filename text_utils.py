@@ -62,10 +62,11 @@ def tokenise(text: str, keep_stopwords: bool = False) -> List[str]:
 
 #: Synonyms mapped to the English vocabulary tool descriptions are written
 #: in - mostly French, but English ones too where the natural word to say is
-#: not the word a description happens to use ("open" vs "launch"). Tool selection compares what the user said against tool names and
-#: descriptions, and those are English while the assistant answers in whichever
-#: language it is spoken to - so without this, a French request matches almost
-#: nothing and selection degrades to registration order.
+#: not the word a description happens to use ("open" vs "launch"). Tool
+#: selection compares what the user said against tool names and descriptions,
+#: and those are English while the assistant answers in whichever language it
+#: is spoken to - so without this, a French request matches almost nothing and
+#: selection degrades to registration order.
 #:
 #: This is a stopgap with a known ceiling: it only covers vocabulary written
 #: down here, and a third-party MCP server can use any words it likes. The
@@ -125,7 +126,7 @@ TERM_ALIASES = {
     "make": ("create",), "new": ("create",),
     "rename": ("move", "rename"), "show": ("list", "show"),
     "folder": ("directory", "folder"),
-    "website": ("web", "page"), "site": ("web", "page"),
+    "website": ("web", "page"),
     "email": ("mail", "email"), "repo": ("repository",),
 }
 
