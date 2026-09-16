@@ -19,7 +19,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import ollama
 from loguru import logger
@@ -37,9 +37,9 @@ class ProviderConfig:
     #: Caps the tools offered when this provider is in use. A 3B fallback
     #: chokes on a toolbox a 70B handles, and the point of falling back is to
     #: keep working, not to keep the same shape.
-    max_tools: Optional[int] = None
+    max_tools: int | None = None
     #: Context window for this model, if it differs from the global setting.
-    num_ctx: Optional[int] = None
+    num_ctx: int | None = None
 
     def describe(self) -> str:
         return f"{self.name} ({self.model} at {self.host})"
@@ -59,7 +59,7 @@ class ProviderState:
         return self.reachable and self.has_model
 
 
-def _parse_provider(index: int, entry: Dict[str, Any]) -> Optional[ProviderConfig]:
+def _parse_provider(index: int, entry: dict[str, Any]) -> ProviderConfig | None:
     host = str(entry.get("host") or "").strip()
     model = str(entry.get("model") or "").strip()
     if not host or not model:
@@ -77,7 +77,7 @@ def _parse_provider(index: int, entry: Dict[str, Any]) -> Optional[ProviderConfi
     )
 
 
-def load_providers(path: Optional[Union[str, Path]] = None) -> List[ProviderConfig]:
+def load_providers(path: str | Path | None = None) -> list[ProviderConfig]:
     """The configured providers, most preferred first.
 
     A JSON file wins when it exists. Otherwise the settings are read, which
@@ -132,9 +132,9 @@ class ProviderPool:
 
     def __init__(
         self,
-        providers: Optional[List[ProviderConfig]] = None,
-        probe_timeout: Optional[float] = None,
-        recheck_seconds: Optional[float] = None,
+        providers: list[ProviderConfig] | None = None,
+        probe_timeout: float | None = None,
+        recheck_seconds: float | None = None,
         client_factory=None,
     ):
         self.providers = providers if providers is not None else load_providers()
@@ -146,16 +146,16 @@ class ProviderPool:
             else settings.llm_provider_recheck_seconds
         )
         self._factory = client_factory or (lambda host: ollama.AsyncClient(host=host))
-        self._clients: Dict[str, Any] = {}
-        self.state: Dict[str, ProviderState] = {
+        self._clients: dict[str, Any] = {}
+        self.state: dict[str, ProviderState] = {
             provider.name: ProviderState() for provider in self.providers
         }
-        self.active: Optional[ProviderConfig] = None
+        self.active: ProviderConfig | None = None
         #: the provider the user was last told about. Kept apart from
         #: ``active``, which a failure clears: otherwise the one message worth
         #: printing - that the model quietly changed - is the one that never
         #: prints.
-        self._announced: Optional[ProviderConfig] = None
+        self._announced: ProviderConfig | None = None
         self._last_full_probe = 0.0
 
     # -- clients ---------------------------------------------------------- #
@@ -167,10 +167,10 @@ class ProviderPool:
         return self._clients[provider.name]
 
     @property
-    def preferred(self) -> Optional[ProviderConfig]:
+    def preferred(self) -> ProviderConfig | None:
         return self.providers[0] if self.providers else None
 
-    def describe(self) -> Dict[str, str]:
+    def describe(self) -> dict[str, str]:
         """What is known about each provider, for the logs and the UI."""
         return {name: state.detail for name, state in self.state.items()}
 
@@ -219,7 +219,7 @@ class ProviderPool:
                 return True
         return False
 
-    async def refresh(self, force: bool = False) -> Optional[ProviderConfig]:
+    async def refresh(self, force: bool = False) -> ProviderConfig | None:
         """Probe in order and settle on the first usable provider.
 
         Probing stops at the first one that works: there is no point asking
@@ -265,7 +265,7 @@ class ProviderPool:
 
     # -- using ------------------------------------------------------------ #
 
-    async def candidates(self) -> List[ProviderConfig]:
+    async def candidates(self) -> list[ProviderConfig]:
         """Providers to try for one turn, best first.
 
         The active one leads; the rest follow in configured order so a turn

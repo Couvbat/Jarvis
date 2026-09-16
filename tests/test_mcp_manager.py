@@ -8,13 +8,12 @@ protocol mistakes through.
 import asyncio
 import contextlib
 
-import pytest
 from mcp import ClientSession
 from mcp.client._memory import InMemoryTransport
 from mcp.server.mcpserver import MCPServer
 
 from tools.mcp.manager import McpManager, McpServer, ServerStatus, result_text
-from tools.mcp.servers import ServerConfig, Transport, Trust
+from tools.mcp.servers import ServerConfig, Transport
 
 
 def build_server(name="probe"):

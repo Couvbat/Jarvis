@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import functools
 import shutil
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, List, Optional
+from typing import Any
 
 from policy.paths import PathPolicy
 from tools.schema import Risk, ToolResult, ToolSpec, namespaced
@@ -208,7 +209,7 @@ class FilesystemTools:
             return ToolResult.error("give a name_pattern, a content_pattern, or both")
 
         needle = str(content_pattern).lower() if content_pattern else None
-        matches: List[str] = []
+        matches: list[str] = []
         scanned = 0
         truncated = False
 
@@ -450,7 +451,7 @@ def _string(description: str) -> dict:
 
 def _path_precheck(path_policy: PathPolicy, *keys: str):
     """Refuse a call whose paths are out of bounds, before anyone is asked."""
-    def check(arguments: dict) -> Optional[str]:
+    def check(arguments: dict) -> str | None:
         for key in keys:
             value = arguments.get(key)
             if value is None or str(value).strip() == "":
@@ -463,7 +464,7 @@ def _path_precheck(path_policy: PathPolicy, *keys: str):
     return check
 
 
-def build_tools(path_policy: PathPolicy) -> List[ToolSpec]:
+def build_tools(path_policy: PathPolicy) -> list[ToolSpec]:
     """Build every filesystem tool against one sandbox."""
     fs = FilesystemTools(path_policy)
     check_path = _path_precheck(path_policy, "path")

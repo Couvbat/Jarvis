@@ -16,10 +16,10 @@ filesystem servers can be held to the same sandbox in Phase 2.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Union
 
 from loguru import logger
 
@@ -43,10 +43,10 @@ class PathPolicy:
 
     def __init__(
         self,
-        allowed_directories: Sequence[Union[str, Path]],
+        allowed_directories: Sequence[str | Path],
         denied_patterns: Iterable[str] = (),
     ):
-        self.allowed_directories: List[Path] = []
+        self.allowed_directories: list[Path] = []
         for directory in allowed_directories:
             candidate = Path(directory).expanduser()
             if not str(candidate).strip() or str(candidate) == ".":
@@ -59,7 +59,7 @@ class PathPolicy:
         self.denied_patterns = [p.strip() for p in denied_patterns if p and p.strip()]
 
     @classmethod
-    def from_settings(cls) -> "PathPolicy":
+    def from_settings(cls) -> PathPolicy:
         """Build the policy the application is configured with."""
         return cls(settings.allowed_dirs_list, settings.denied_patterns_list)
 
@@ -67,14 +67,14 @@ class PathPolicy:
         """Human-readable list of roots, for error messages and the UI."""
         return ", ".join(str(directory) for directory in self.allowed_directories) or "(none)"
 
-    def _root_for(self, resolved: Path) -> Optional[Path]:
+    def _root_for(self, resolved: Path) -> Path | None:
         """The allowed directory containing this path, if any."""
         for directory in self.allowed_directories:
             if resolved == directory or directory in resolved.parents:
                 return directory
         return None
 
-    def _denied_component(self, resolved: Path, root: Path) -> Optional[str]:
+    def _denied_component(self, resolved: Path, root: Path) -> str | None:
         """The first component below ``root`` that matches a denied pattern."""
         try:
             relative = resolved.relative_to(root)
@@ -87,7 +87,7 @@ class PathPolicy:
                     return component
         return None
 
-    def check(self, raw_path: Union[str, Path]) -> PathVerdict:
+    def check(self, raw_path: str | Path) -> PathVerdict:
         """Check one path. The path need not exist: creating a file is normal."""
         try:
             candidate = Path(raw_path).expanduser()

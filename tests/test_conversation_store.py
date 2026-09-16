@@ -2,7 +2,7 @@
 
 import pytest
 
-from conversation_store import Conversation, ConversationStore
+from conversation_store import ConversationStore
 from llm_module import ConversationHistory, LLMModule
 from tests._stubs import make_chat_response, make_tool_call
 

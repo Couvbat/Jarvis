@@ -6,8 +6,6 @@ Phase 2 is a matter of registering more specs into the same registry.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from loguru import logger
 
 from config import settings
@@ -19,7 +17,7 @@ from tools.mcp.servers import load_servers
 from tools.registry import DuplicateToolError, ToolRegistry
 
 
-def build_default_registry(path_policy: Optional[PathPolicy] = None) -> ToolRegistry:
+def build_default_registry(path_policy: PathPolicy | None = None) -> ToolRegistry:
     """Register every built-in tool, configured from settings."""
     paths = path_policy if path_policy is not None else PathPolicy.from_settings()
 

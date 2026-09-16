@@ -9,7 +9,6 @@ roughly the time it takes to generate one sentence.
 from __future__ import annotations
 
 import re
-from typing import List, Optional
 
 #: Characters that can end a spoken sentence.
 TERMINATORS = ".!?…"
@@ -68,10 +67,10 @@ class SentenceChunker:
         self._buffer = ""
         self._emitted = 0
 
-    def feed(self, text: str) -> List[str]:
+    def feed(self, text: str) -> list[str]:
         """Add newly generated text; return whatever is ready to speak."""
         self._buffer += text
-        ready: List[str] = []
+        ready: list[str] = []
 
         while True:
             piece = self._take_next()
@@ -81,7 +80,7 @@ class SentenceChunker:
 
         return ready
 
-    def _take_next(self) -> Optional[str]:
+    def _take_next(self) -> str | None:
         # A newline is a hard break: a list item or paragraph is its own
         # utterance whatever its length.
         newline = self._buffer.find("\n")
@@ -120,7 +119,7 @@ class SentenceChunker:
         self._emitted += 1
         return piece
 
-    def _take_more(self, piece: str, remainder: str) -> Optional[str]:
+    def _take_more(self, piece: str, remainder: str) -> str | None:
         """Extend a too-short piece with the sentence that follows it."""
         self._buffer = remainder
         following = self._take_next()
@@ -129,7 +128,7 @@ class SentenceChunker:
             return None
         return f"{piece} {following}"
 
-    def flush(self) -> Optional[str]:
+    def flush(self) -> str | None:
         """Whatever is left once generation has finished."""
         piece = self._buffer.strip()
         self._buffer = ""

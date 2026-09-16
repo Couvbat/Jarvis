@@ -18,7 +18,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from loguru import logger
 
@@ -51,7 +51,7 @@ class Conversation:
 
     id: int
     started_at: str
-    ended_at: Optional[str]
+    ended_at: str | None
     message_count: int = 0
     preview: str = ""
 
@@ -63,7 +63,7 @@ def _now() -> str:
 class ConversationStore:
     """Writes turns down and reads them back."""
 
-    def __init__(self, path: Union[str, Path] = ":memory:"):
+    def __init__(self, path: str | Path = ":memory:"):
         self.path = str(path)
         if self.path != ":memory:":
             resolved = Path(self.path).expanduser()
@@ -88,7 +88,7 @@ class ConversationStore:
             )
         return int(cursor.lastrowid)
 
-    def append(self, conversation_id: int, message: Dict[str, Any]) -> None:
+    def append(self, conversation_id: int, message: dict[str, Any]) -> None:
         """Record one turn. Never raises: losing the log is not worth a crash."""
         try:
             with self._connection:
@@ -129,7 +129,7 @@ class ConversationStore:
 
     # -- reading ---------------------------------------------------------- #
 
-    def messages(self, conversation_id: int, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def messages(self, conversation_id: int, limit: int | None = None) -> list[dict[str, Any]]:
         """The turns of one conversation, oldest first.
 
         ``limit`` keeps the *most recent* turns, which is what resuming wants:
@@ -159,7 +159,7 @@ class ConversationStore:
 
         messages = []
         for row in rows:
-            message: Dict[str, Any] = {"role": row["role"], "content": row["content"]}
+            message: dict[str, Any] = {"role": row["role"], "content": row["content"]}
             if row["name"]:
                 message["name"] = row["name"]
             if row["tool_calls"]:
@@ -170,7 +170,7 @@ class ConversationStore:
             messages.append(message)
         return messages
 
-    def recent(self, limit: int = 10) -> List[Conversation]:
+    def recent(self, limit: int = 10) -> list[Conversation]:
         """The most recent conversations, newest first."""
         with closing(self._connection.execute(
             "SELECT c.id, c.started_at, c.ended_at, "
@@ -192,7 +192,7 @@ class ConversationStore:
                 for row in cursor.fetchall()
             ]
 
-    def last_id(self) -> Optional[int]:
+    def last_id(self) -> int | None:
         """The most recent conversation that actually has turns in it."""
         with closing(self._connection.execute(
             "SELECT c.id FROM conversations c "
@@ -202,7 +202,7 @@ class ConversationStore:
             row = cursor.fetchone()
         return int(row["id"]) if row else None
 
-    def search(self, text: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def search(self, text: str, limit: int = 20) -> list[dict[str, Any]]:
         """Turns containing some text, newest first."""
         needle = f"%{text}%"
         with closing(self._connection.execute(

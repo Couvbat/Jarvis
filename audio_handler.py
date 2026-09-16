@@ -1,13 +1,13 @@
 """Audio input/output handler with Voice Activity Detection."""
 
+
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
 import webrtcvad
-from typing import Optional
 from loguru import logger
-from config import settings
 
+from config import settings
 
 # webrtcvad only accepts frames of exactly 10, 20 or 30 ms of 16-bit mono PCM.
 # The capture block size is a separate concern (latency vs. syscall overhead),
@@ -35,7 +35,7 @@ class AudioHandler:
             return None
         return int(value) if value.isdigit() else value
 
-    def _vad_frame_samples(self) -> Optional[int]:
+    def _vad_frame_samples(self) -> int | None:
         """Samples per VAD frame, or None when the rate rules the VAD out."""
         if self.sample_rate not in VAD_SAMPLE_RATES:
             logger.warning(
@@ -67,13 +67,13 @@ class AudioHandler:
             logger.warning(f"VAD rejected a frame ({e}); silence detection disabled")
             self.vad_frame_samples = None
             return True
-        
+
     def record_until_silence(
         self,
         silence_threshold: float = 1.0,
         max_duration: float = 30.0,
         min_duration: float = 0.5,
-        prefix: Optional[np.ndarray] = None,
+        prefix: np.ndarray | None = None,
     ) -> np.ndarray:
         """
         Record audio until the speaker falls silent.
@@ -158,19 +158,19 @@ class AudioHandler:
 
         return audio_data
 
-    def play_audio(self, audio_data: np.ndarray, sample_rate: Optional[int] = None):
+    def play_audio(self, audio_data: np.ndarray, sample_rate: int | None = None):
         """
         Play audio data.
-        
+
         Args:
             audio_data: Audio samples as numpy array
             sample_rate: Sample rate (uses default if None)
         """
         if sample_rate is None:
             sample_rate = self.sample_rate
-            
+
         logger.info(f"Playing audio: {len(audio_data) / sample_rate:.2f}s")
-        
+
         try:
             sd.play(audio_data, sample_rate)
             sd.wait()
@@ -178,7 +178,7 @@ class AudioHandler:
         except Exception as e:
             logger.error(f"Playback error: {e}")
             raise
-    
+
     def stop_playback(self):
         """Cut playback immediately, for an interruption."""
         try:
@@ -194,7 +194,7 @@ class AudioHandler:
         except Exception as e:
             logger.error(f"Error saving audio: {e}")
             raise
-    
+
     def load_audio(self, filename: str) -> tuple[np.ndarray, int]:
         """Load audio from file."""
         try:

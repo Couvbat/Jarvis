@@ -9,10 +9,10 @@ to the model without also being visible to the policy engine.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any, Callable, Dict, Optional
-
+from typing import Any
 
 #: Separates the provider from the tool name: ``fs__read``, ``git__commit``.
 #: MCP servers get a namespace each, so two servers can both expose "search".
@@ -35,7 +35,7 @@ def namespaced(namespace: str, name: str) -> str:
     return f"{namespace}{NAMESPACE_SEPARATOR}{name}"
 
 
-def split_name(name: str) -> tuple[Optional[str], str]:
+def split_name(name: str) -> tuple[str | None, str]:
     """Split a qualified tool name into (namespace, bare name)."""
     if NAMESPACE_SEPARATOR not in name:
         return None, name
@@ -58,10 +58,10 @@ class ToolResult:
 
     #: Where this content came from - a domain, an MCP server name. Used to
     #: tell "read more from the same place" from "now send it somewhere else".
-    origin: Optional[str] = None
+    origin: str | None = None
 
     @classmethod
-    def error(cls, message: str) -> "ToolResult":
+    def error(cls, message: str) -> ToolResult:
         """A failure the model should see and can act on."""
         return cls(content=f"Error: {message}", ok=False)
 
@@ -72,7 +72,7 @@ class ToolSpec:
 
     name: str
     description: str
-    input_schema: Dict[str, Any]
+    input_schema: dict[str, Any]
     handler: Callable[..., ToolResult]
 
     #: Baseline risk. Defaults to the worst case: a capability that has not
@@ -86,7 +86,7 @@ class ToolSpec:
     #: meaningful for egress tools, and it is what separates reading more from
     #: a source that already tainted the turn from handing that source's
     #: content to somewhere new.
-    origin_for: Optional[Callable[[Dict[str, Any]], str]] = None
+    origin_for: Callable[[dict[str, Any]], str] | None = None
 
     #: The user authorised this out of band - by marking an MCP server
     #: "trusted" in their configuration, say - so a non-destructive call needs
@@ -96,11 +96,11 @@ class ToolSpec:
     #: Refines the risk from the actual arguments. Overwriting an existing
     #: file is destructive; creating a new one is not, and only the arguments
     #: can tell the two apart. It may only raise the baseline, never lower it.
-    risk_for: Optional[Callable[[Dict[str, Any]], Risk]] = None
+    risk_for: Callable[[dict[str, Any]], Risk] | None = None
 
     #: Claims made by the provider (e.g. MCP tool annotations). Recorded, not
     #: believed: how much weight they carry is the policy engine's call.
-    hints: Dict[str, Any] = field(default_factory=dict)
+    hints: dict[str, Any] = field(default_factory=dict)
 
     #: Cheap, deterministic reasons this call can never succeed - a path
     #: outside the sandbox, a command that is not whitelisted. Returns the
@@ -108,15 +108,15 @@ class ToolSpec:
     #: anything: a confirmation prompt spends the user's attention, and
     #: spending it on something that will be refused anyway trains them to
     #: wave prompts through. Anything needing I/O belongs in the handler.
-    precheck: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None
+    precheck: Callable[[dict[str, Any]], str | None] | None = None
 
     #: What an approval for a call should cover, derived from its arguments -
     #: a directory for a file write, a domain for a fetch. The tool knows this;
     #: the policy engine does not. Without one, approvals cover exactly the
     #: arguments given, which is the narrowest and safest default.
-    scope_for: Optional[Callable[[Dict[str, Any]], str]] = None
+    scope_for: Callable[[dict[str, Any]], str] | None = None
 
-    def assess(self, arguments: Dict[str, Any]) -> Risk:
+    def assess(self, arguments: dict[str, Any]) -> Risk:
         """The risk of calling this tool with these arguments."""
         if self.risk_for is None:
             return self.risk
@@ -127,7 +127,7 @@ class ToolSpec:
             return Risk.DESTRUCTIVE
 
 
-def to_ollama_schema(spec: ToolSpec) -> Dict[str, Any]:
+def to_ollama_schema(spec: ToolSpec) -> dict[str, Any]:
     """Render a spec as the function schema Ollama expects."""
     return {
         "type": "function",
@@ -145,10 +145,10 @@ def from_mcp_tool(
     handler: Callable[..., ToolResult],
     risk: Risk = Risk.DESTRUCTIVE,
     preapproved: bool = False,
-    scope_for: Optional[Callable[[Dict[str, Any]], str]] = None,
-    origin_for: Optional[Callable[[Dict[str, Any]], str]] = None,
-    precheck: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
-    qualified_name: Optional[str] = None,
+    scope_for: Callable[[dict[str, Any]], str] | None = None,
+    origin_for: Callable[[dict[str, Any]], str] | None = None,
+    precheck: Callable[[dict[str, Any]], str | None] | None = None,
+    qualified_name: str | None = None,
 ) -> ToolSpec:
     """Build a spec from an MCP tool description.
 

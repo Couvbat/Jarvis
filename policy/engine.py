@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -55,7 +55,7 @@ class Decision:
         return self.allowed and self.surface is Surface.NONE
 
 
-def summarise(tool: str, arguments: Dict[str, Any]) -> str:
+def summarise(tool: str, arguments: dict[str, Any]) -> str:
     """Render a call the way a person needs to read it before agreeing.
 
     The arguments are the point: "delete /home/me/Documents, recursive=true"
@@ -75,10 +75,10 @@ def summarise(tool: str, arguments: Dict[str, Any]) -> str:
 class PolicyEngine:
     """Applies the rules in ARCHITECTURE.md section 5 to one call at a time."""
 
-    def __init__(self, store: Optional[ApprovalStore] = None):
+    def __init__(self, store: ApprovalStore | None = None):
         self.store = store if store is not None else ApprovalStore()
 
-    def scope_for(self, spec: ToolSpec, arguments: Dict[str, Any]) -> str:
+    def scope_for(self, spec: ToolSpec, arguments: dict[str, Any]) -> str:
         """What an approval for this call would cover.
 
         Falls back to the exact arguments, so an unfamiliar tool - an MCP one,
@@ -92,8 +92,8 @@ class PolicyEngine:
         return repr(sorted((str(k), str(v)) for k, v in arguments.items()))
 
     def origin_for(
-        self, spec: ToolSpec, arguments: Dict[str, Any]
-    ) -> Optional[str]:
+        self, spec: ToolSpec, arguments: dict[str, Any]
+    ) -> str | None:
         """Where a call would send data, if the tool can say."""
         if spec.origin_for is None:
             return None
@@ -106,8 +106,8 @@ class PolicyEngine:
     def evaluate(
         self,
         spec: ToolSpec,
-        arguments: Optional[Dict[str, Any]] = None,
-        taint: Optional[TaintState] = None,
+        arguments: dict[str, Any] | None = None,
+        taint: TaintState | None = None,
     ) -> Decision:
         """Decide what has to happen before this call runs."""
         arguments = dict(arguments or {})

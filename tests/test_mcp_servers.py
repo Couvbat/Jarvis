@@ -2,8 +2,6 @@
 
 import json
 
-import pytest
-
 from tools.mcp.servers import ServerConfig, Transport, Trust, load_servers
 
 

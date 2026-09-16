@@ -17,7 +17,6 @@ straightforwardly. On open speakers, expect to leave it off.
 from __future__ import annotations
 
 import asyncio
-from typing import Callable, List, Optional
 
 import numpy as np
 import sounddevice as sd
@@ -58,9 +57,9 @@ class BargeInListener:
         self.detected = asyncio.Event()
         #: Audio captured from the moment speech started, so the words that
         #: interrupted are not lost to the turn they start.
-        self.captured: Optional[np.ndarray] = None
+        self.captured: np.ndarray | None = None
 
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
         self._stop = False
         self._floor = MIN_ENERGY
 
@@ -74,7 +73,7 @@ class BargeInListener:
             asyncio.to_thread(self._listen), name="barge-in"
         )
 
-    async def stop(self) -> Optional[np.ndarray]:
+    async def stop(self) -> np.ndarray | None:
         """Stop listening and return whatever speech was captured."""
         self._stop = True
         task, self._task = self._task, None
@@ -95,8 +94,8 @@ class BargeInListener:
             return
 
         speech_run = 0
-        calibration: List[float] = []
-        kept: List[np.ndarray] = []
+        calibration: list[float] = []
+        kept: list[np.ndarray] = []
 
         try:
             with sd.InputStream(

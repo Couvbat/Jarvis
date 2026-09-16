@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 from mcp import StdioServerParameters
@@ -26,7 +26,7 @@ from mcp.client.session_group import (
     StreamableHttpParameters,
 )
 
-from tools.mcp.servers import ServerConfig, Transport, Trust
+from tools.mcp.servers import ServerConfig, Transport
 from tools.schema import NAMESPACE_SEPARATOR, ToolResult
 
 #: Seconds to wait for a server to connect and list its tools.
@@ -47,7 +47,7 @@ class ServerStatus(str, Enum):
 
 def result_text(result: Any) -> str:
     """Flatten an MCP CallToolResult into text for the model."""
-    parts: List[str] = []
+    parts: list[str] = []
     for block in getattr(result, "content", None) or []:
         text = getattr(block, "text", None)
         if text is not None:
@@ -78,10 +78,10 @@ class McpServer:
 
         self.status = ServerStatus.DISABLED if not config.enabled else ServerStatus.STOPPED
         self.error = ""
-        self.tools: Dict[str, Any] = {}
+        self.tools: dict[str, Any] = {}
 
-        self._group: Optional[ClientSessionGroup] = None
-        self._task: Optional[asyncio.Task] = None
+        self._group: ClientSessionGroup | None = None
+        self._task: asyncio.Task | None = None
         self._was_connected = False
         self._ready = asyncio.Event()
         self._shutdown = asyncio.Event()
@@ -226,7 +226,7 @@ class McpServer:
 
     # -- calling ---------------------------------------------------------- #
 
-    async def call(self, qualified_name: str, arguments: Dict[str, Any]) -> ToolResult:
+    async def call(self, qualified_name: str, arguments: dict[str, Any]) -> ToolResult:
         """Run one tool on this server."""
         if not self.is_connected:
             return ToolResult.error(
@@ -265,11 +265,11 @@ class McpManager:
 
     def __init__(
         self,
-        configs: List[ServerConfig],
+        configs: list[ServerConfig],
         connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
         call_timeout: float = DEFAULT_CALL_TIMEOUT,
     ):
-        self.servers: List[McpServer] = [
+        self.servers: list[McpServer] = [
             McpServer(config, connect_timeout, call_timeout) for config in configs
         ]
 
@@ -277,10 +277,10 @@ class McpManager:
         return len(self.servers)
 
     @property
-    def connected(self) -> List[McpServer]:
+    def connected(self) -> list[McpServer]:
         return [s for s in self.servers if s.status is ServerStatus.CONNECTED]
 
-    def statuses(self) -> Dict[str, str]:
+    def statuses(self) -> dict[str, str]:
         """What happened to each server, for the UI and the logs."""
         return {
             server.namespace: (
@@ -290,7 +290,7 @@ class McpManager:
             for server in self.servers
         }
 
-    def server_for(self, qualified_name: str) -> Optional[McpServer]:
+    def server_for(self, qualified_name: str) -> McpServer | None:
         """Which server owns a namespaced tool name."""
         namespace = qualified_name.split(NAMESPACE_SEPARATOR, 1)[0]
         for server in self.servers:

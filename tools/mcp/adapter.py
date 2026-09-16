@@ -9,7 +9,7 @@ tool look safer is the trust level the **user** set for that server.
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -22,7 +22,7 @@ def _hint(tool: Any, name: str) -> bool:
     return getattr(annotations, name, None) is True
 
 
-def risk_for(tool: Any, trust: Trust) -> Optional[Risk]:
+def risk_for(tool: Any, trust: Trust) -> Risk | None:
     """The risk to assign a tool, or None to not expose it at all."""
     read_only = _hint(tool, "read_only_hint")
 
@@ -47,10 +47,10 @@ def risk_for(tool: Any, trust: Trust) -> Optional[Risk]:
     return Risk.WRITE
 
 
-def build_specs(server: Any) -> List[ToolSpec]:
+def build_specs(server: Any) -> list[ToolSpec]:
     """Registry entries for every tool a connected server exposes."""
     trust = server.config.trust
-    specs: List[ToolSpec] = []
+    specs: list[ToolSpec] = []
 
     for qualified_name, tool in server.tools.items():
         risk = risk_for(tool, trust)
@@ -111,7 +111,7 @@ def _make_origin(namespace: str):
 
 
 def _make_precheck(server: Any):
-    def precheck(_arguments: dict) -> Optional[str]:
+    def precheck(_arguments: dict) -> str | None:
         if not server.is_connected:
             return (
                 f"MCP server '{server.namespace}' is not connected "

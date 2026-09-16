@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import List
 
 #: Words that carry no signal for either matching commands or picking tools.
 #: Both languages, because the assistant answers in whichever it is spoken to.
@@ -37,7 +36,7 @@ def normalise(text: str) -> str:
     return " ".join(cleaned.split())
 
 
-def tokenise(text: str, keep_stopwords: bool = False) -> List[str]:
+def tokenise(text: str, keep_stopwords: bool = False) -> list[str]:
     """Split text into comparable terms.
 
     Identifiers are split on case and separators too, so ``fs__read_file``
@@ -46,7 +45,7 @@ def tokenise(text: str, keep_stopwords: bool = False) -> List[str]:
     """
     # Accents come off first: "Crée" must split as one word, not "Cr" + "e".
     pieces = re.split(r"[^0-9A-Za-z]+", strip_accents(text))
-    terms: List[str] = []
+    terms: list[str] = []
     for piece in pieces:
         if not piece:
             continue
@@ -131,7 +130,7 @@ TERM_ALIASES = {
 }
 
 
-def expand(terms: List[str]) -> List[str]:
+def expand(terms: list[str]) -> list[str]:
     """Add the English equivalents of any French terms, keeping the originals."""
     expanded = list(terms)
     for term in terms:

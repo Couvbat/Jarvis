@@ -3,13 +3,13 @@
 import json
 import subprocess
 import tempfile
-import numpy as np
 from pathlib import Path
-from typing import Tuple
-from loguru import logger
-from config import settings
-import soundfile as sf
 
+import numpy as np
+import soundfile as sf
+from loguru import logger
+
+from config import settings
 
 #: Used until a voice config or a synthesised file says otherwise. Piper's
 #: *-medium voices are 22050 Hz, but *-low voices are 16000 Hz.
@@ -18,14 +18,14 @@ DEFAULT_SAMPLE_RATE = 22050
 
 class TTSModule:
     """Text-to-Speech service using Piper."""
-    
+
     def __init__(self):
         self.model_name = settings.piper_model
         self.speaker_id = settings.piper_speaker_id
         self.piper_binary = self._find_piper_binary()
         self.model_path = None
         self.sample_rate = DEFAULT_SAMPLE_RATE
-        
+
     def _find_piper_binary(self) -> str:
         """Locate the piper binary."""
         # Common installation locations
@@ -53,10 +53,10 @@ class TTSModule:
             # setup_piper.py produces, and used to crash construction.
             except (OSError, subprocess.TimeoutExpired):
                 continue
-        
+
         logger.warning("Piper binary not found in common locations")
         return "piper"  # Fallback to PATH
-    
+
     def _find_model_path(self) -> Path:
         """Find the Piper model file."""
         # Common model locations
@@ -65,18 +65,18 @@ class TTSModule:
             Path("/usr/share/piper/models"),
             Path("./piper/models")
         ]
-        
+
         model_filename = f"{self.model_name}.onnx"
-        
+
         for model_dir in model_dirs:
             model_path = model_dir / model_filename
             if model_path.exists():
                 logger.info(f"Found model: {model_path}")
                 return model_path
-        
+
         logger.warning(f"Model not found: {model_filename}")
         return Path(model_filename)  # Return filename, let piper try to find it
-    
+
     def _read_model_sample_rate(self) -> int:
         """Read the voice's sample rate from its Piper config, if present."""
         config_path = Path(f"{self.model_path}.json")
@@ -92,11 +92,11 @@ class TTSModule:
     def initialize(self):
         """Initialize the TTS module."""
         logger.info(f"Initializing TTS with model: {self.model_name}")
-        
+
         # Find model
         self.model_path = self._find_model_path()
         self.sample_rate = self._read_model_sample_rate()
-        
+
         # Test piper
         try:
             result = subprocess.run(
@@ -111,8 +111,8 @@ class TTSModule:
         except Exception as e:
             logger.error(f"Piper initialization error: {e}")
             logger.info("Install Piper: https://github.com/rhasspy/piper")
-    
-    def synthesize(self, text: str) -> Tuple[np.ndarray, int]:
+
+    def synthesize(self, text: str) -> tuple[np.ndarray, int]:
         """
         Convert text to speech.
 
@@ -152,7 +152,7 @@ class TTSModule:
                 cmd.extend(["--speaker", str(self.speaker_id)])
 
             # Run piper
-            with open(text_file_path, 'r') as stdin_file:
+            with open(text_file_path) as stdin_file:
                 result = subprocess.run(
                     cmd,
                     stdin=stdin_file,
@@ -187,23 +187,23 @@ class TTSModule:
     def synthesize_to_file(self, text: str, output_file: str):
         """
         Synthesize text and save to file.
-        
+
         Args:
             text: Text to synthesize
             output_file: Output audio file path
         """
         logger.info(f"Synthesizing to file: {output_file}")
-        
+
         try:
             cmd = [
                 self.piper_binary,
                 "--model", str(self.model_path),
                 "--output_file", output_file
             ]
-            
+
             if self.speaker_id > 0:
                 cmd.extend(["--speaker", str(self.speaker_id)])
-            
+
             # Run piper with text as stdin
             result = subprocess.run(
                 cmd,
@@ -211,13 +211,13 @@ class TTSModule:
                 capture_output=True,
                 timeout=30
             )
-            
+
             if result.returncode != 0:
                 logger.error(f"Piper error: {result.stderr.decode()}")
-                raise RuntimeError(f"Piper synthesis failed")
-            
+                raise RuntimeError("Piper synthesis failed")
+
             logger.info(f"Audio saved to {output_file}")
-            
+
         except Exception as e:
             logger.error(f"TTS to file error: {e}")
             raise

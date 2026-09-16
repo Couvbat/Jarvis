@@ -1,7 +1,6 @@
 """Tests for the application launcher and its whitelist (tools/local/apps.py)."""
 
 import subprocess
-from pathlib import Path
 
 import pytest
 

@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import math
 from collections import Counter
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Sequence
 
 from loguru import logger
 
@@ -67,9 +67,9 @@ class ToolSelector:
     #: it" carries no keywords of its own.
     recent_size: int = 4
 
-    _recent: List[str] = field(default_factory=list)
-    _index: Dict[str, Counter] = field(default_factory=dict)
-    _idf: Dict[str, float] = field(default_factory=dict)
+    _recent: list[str] = field(default_factory=list)
+    _index: dict[str, Counter] = field(default_factory=dict)
+    _idf: dict[str, float] = field(default_factory=dict)
     _indexed_names: tuple = ()
 
     # -- index ------------------------------------------------------------ #
@@ -132,8 +132,8 @@ class ToolSelector:
         self,
         registry: ToolRegistry,
         utterance: str = "",
-        context: Optional[Sequence[str]] = None,
-    ) -> Optional[List[str]]:
+        context: Sequence[str] | None = None,
+    ) -> list[str] | None:
         """Tool names to offer, or None to offer everything.
 
         ``context`` is recent conversation text: "and delete it" only makes
@@ -156,7 +156,7 @@ class ToolSelector:
             key=lambda pair: (-pair[0], pair[1]),
         )
 
-        chosen: List[str] = []
+        chosen: list[str] = []
         # Recently used tools first: a follow-up needs them and may not name
         # them, and they cost nothing when they would have scored anyway.
         for name in reversed(self._recent):

@@ -11,7 +11,6 @@ that quotes the tool's own words measures nothing.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -19,10 +18,10 @@ class Case:
     utterance: str
     expected_tool: str
     #: Arguments the model should extract, where they are unambiguous.
-    expected_arguments: Dict[str, str] = field(default_factory=dict)
+    expected_arguments: dict[str, str] = field(default_factory=dict)
     language: str = "fr"
     #: Turns that came before, for follow-ups that name nothing themselves.
-    context: Optional[List[str]] = None
+    context: list[str] | None = None
 
 
 #: Tools a plausible MCP setup would add on top of the built-in ones, used to
@@ -49,7 +48,7 @@ EXTRA_TOOLS = [
 ]
 
 
-CASES: List[Case] = [
+CASES: list[Case] = [
     # -- files, French ---------------------------------------------------- #
     Case("crée un fichier de courses dans mes documents", "fs__write"),
     Case("écris bonjour dans le fichier test point txt", "fs__write"),

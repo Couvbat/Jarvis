@@ -13,8 +13,9 @@ import os
 import shlex
 import shutil
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any
 
 from loguru import logger
 
@@ -39,7 +40,7 @@ class AppTools:
         self.gui_applications = [g.strip() for g in gui_applications if g and g.strip()]
         self.timeout = timeout
 
-    def _resolve_executable(self, executable: str) -> Tuple[Optional[str], str]:
+    def _resolve_executable(self, executable: str) -> tuple[str | None, str]:
         """Resolve a command to a path, refusing anything PATH would not give.
 
         Comparing raw strings is not enough: "/bin/ls" and "ls" name the same
@@ -85,7 +86,7 @@ class AppTools:
 
         executable, inline_args = parts[0], parts[1:]
 
-        extra: List[str] = []
+        extra: list[str] = []
         if args:
             extra = [str(a) for a in args] if isinstance(args, (list, tuple)) else [str(args)]
 
@@ -138,7 +139,7 @@ def _whitelist_precheck(command_whitelist: Sequence[str]):
     """Refuse a command that is not whitelisted, before anyone is asked."""
     allowed = [c.strip() for c in command_whitelist if c and c.strip()]
 
-    def check(arguments: dict) -> Optional[str]:
+    def check(arguments: dict) -> str | None:
         raw = str(arguments.get("application") or "").strip()
         if not raw:
             return "application is required"
@@ -174,7 +175,7 @@ def build_tools(
     command_whitelist: Sequence[str],
     gui_applications: Sequence[str] = (),
     timeout: int = CLI_TIMEOUT_SECONDS,
-) -> List[ToolSpec]:
+) -> list[ToolSpec]:
     """Build the application tools."""
     apps = AppTools(command_whitelist, gui_applications, timeout)
     return [

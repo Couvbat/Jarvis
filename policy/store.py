@@ -12,7 +12,6 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Union
 
 from loguru import logger
 
@@ -42,7 +41,7 @@ class Approval:
 class ApprovalStore:
     """Remembers what the user has already said yes to."""
 
-    def __init__(self, path: Union[str, Path] = ":memory:"):
+    def __init__(self, path: str | Path = ":memory:"):
         self.path = str(path)
         if self.path != ":memory:":
             Path(self.path).expanduser().parent.mkdir(parents=True, exist_ok=True)
@@ -95,7 +94,7 @@ class ApprovalStore:
             )
         return cursor.rowcount > 0
 
-    def get(self, tool: str, scope: str) -> Optional[Approval]:
+    def get(self, tool: str, scope: str) -> Approval | None:
         """The stored approval for a tool and scope, if any."""
         with closing(self._connection.execute(
             "SELECT * FROM approvals WHERE tool = ? AND scope = ?", (tool, scope)
@@ -103,7 +102,7 @@ class ApprovalStore:
             row = cursor.fetchone()
         return self._to_approval(row) if row else None
 
-    def all(self) -> List[Approval]:
+    def all(self) -> list[Approval]:
         """Every approval, newest first - what the user would want to review."""
         with closing(self._connection.execute(
             "SELECT * FROM approvals ORDER BY granted_at DESC, tool, scope"

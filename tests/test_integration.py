@@ -10,7 +10,7 @@ import pytest
 
 import main as main_module
 from main import Jarvis
-from policy.engine import PolicyEngine, Surface
+from policy.engine import Surface
 from policy.paths import PathPolicy
 from policy.store import ApprovalStore
 from tests._stubs import make_chat_response, make_tool_call

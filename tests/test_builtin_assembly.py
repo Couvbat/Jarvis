@@ -1,6 +1,5 @@
 """Tests for assembling the tool set (tools/builtin.py)."""
 
-import pytest
 
 from policy.paths import PathPolicy
 from tools.builtin import attach_mcp_tools, build_default_registry, build_mcp_manager

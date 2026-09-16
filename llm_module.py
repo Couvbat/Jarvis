@@ -1,8 +1,10 @@
 """LLM module with Ollama integration and function calling."""
 
-from collections.abc import Mapping
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable, Mapping
+from typing import Any
+
 from loguru import logger
+
 from config import settings
 from conversation_store import ConversationStore
 from llm_providers import ProviderConfig, ProviderPool
@@ -36,11 +38,11 @@ class ConversationHistory:
     def __init__(
         self,
         max_history: int = 10,
-        on_turn: Optional[Callable[[Dict[str, Any]], None]] = None,
+        on_turn: Callable[[dict[str, Any]], None] | None = None,
     ):
         self.max_history = max(0, max_history)
-        self.system_message: Optional[Dict[str, Any]] = None
-        self.turns: List[Dict[str, Any]] = []
+        self.system_message: dict[str, Any] | None = None
+        self.turns: list[dict[str, Any]] = []
         #: Called with each turn as it is appended. Trimming drops turns from
         #: memory to stay inside the context window; whoever is listening keeps
         #: the record, so the two must not be the same thing.
@@ -56,7 +58,7 @@ class ConversationHistory:
             self.set_system(content)
             return
 
-        message: Dict[str, Any] = {"role": role, "content": content}
+        message: dict[str, Any] = {"role": role, "content": content}
         message.update({key: value for key, value in fields.items() if value})
         self.turns.append(message)
 
@@ -73,7 +75,7 @@ class ConversationHistory:
         """Append a user turn."""
         self.add_message("user", content)
 
-    def add_assistant(self, content: str, tool_calls: Optional[List[Any]] = None):
+    def add_assistant(self, content: str, tool_calls: list[Any] | None = None):
         """Append an assistant turn, keeping any tool calls structured."""
         self.add_message("assistant", content or "", tool_calls=to_plain(tool_calls))
 
@@ -107,12 +109,12 @@ class ConversationHistory:
         while self.turns and self.turns[0]["role"] == "tool":
             self.turns.pop(0)
 
-    def get_messages(self) -> List[Dict[str, Any]]:
+    def get_messages(self) -> list[dict[str, Any]]:
         """The full message list to send to the model."""
         messages = [self.system_message] if self.system_message else []
         return messages + self.turns
 
-    def restore(self, messages: List[Dict[str, Any]]) -> int:
+    def restore(self, messages: list[dict[str, Any]]) -> int:
         """Load turns from an earlier session without re-recording them."""
         listener, self.on_turn = self.on_turn, None
         try:
@@ -136,7 +138,7 @@ class ConversationHistory:
 
 class LLMModule:
     """LLM service using Ollama with function calling support."""
-    
+
     # System prompt defining assistant behavior and available tools
     SYSTEM_PROMPT = """You are Jarvis, a local voice assistant running on Linux.
 
@@ -160,14 +162,14 @@ speak English."""
 
     def __init__(
         self,
-        registry: Optional[ToolRegistry] = None,
-        selector: Optional[ToolSelector] = None,
-        store: Optional[ConversationStore] = None,
-        providers: Optional[ProviderPool] = None,
+        registry: ToolRegistry | None = None,
+        selector: ToolSelector | None = None,
+        store: ConversationStore | None = None,
+        providers: ProviderPool | None = None,
     ):
         self.registry = registry
         self.store = store
-        self.conversation_id: Optional[int] = None
+        self.conversation_id: int | None = None
         self.selector = selector if selector is not None else ToolSelector(
             threshold=settings.tool_selection_threshold,
             top_k=settings.tool_selection_top_k,
@@ -189,7 +191,7 @@ speak English."""
         self.history.set_system(self.SYSTEM_PROMPT)
 
     @property
-    def provider(self) -> Optional[ProviderConfig]:
+    def provider(self) -> ProviderConfig | None:
         """The provider serving this session, or the preferred one before any
         probe has run."""
         return self.providers.active or self.providers.preferred
@@ -204,12 +206,12 @@ speak English."""
         provider = self.provider
         return provider.model if provider is not None else ""
 
-    def _record(self, message: Dict[str, Any]) -> None:
+    def _record(self, message: dict[str, Any]) -> None:
         """Write a turn to the conversation log, if one is being kept."""
         if self.store is not None and self.conversation_id is not None:
             self.store.append(self.conversation_id, message)
 
-    def resume(self, conversation_id: Optional[int] = None) -> int:
+    def resume(self, conversation_id: int | None = None) -> int:
         """Carry an earlier conversation's turns into this session.
 
         Only the most recent turns come back: the end of a conversation is the
@@ -228,7 +230,7 @@ speak English."""
         logger.info(f"Resumed {restored} turn(s) from conversation {source}")
         return restored
 
-    async def status(self) -> Tuple[Optional[ProviderConfig], Dict[str, str]]:
+    async def status(self) -> tuple[ProviderConfig | None, dict[str, str]]:
         """Which provider will serve this session, and what each one reported.
 
         Called once at startup: a stopped server otherwise shows up only as a
@@ -242,7 +244,7 @@ speak English."""
         await self.providers.refresh(force=True)
         return any(state.reachable for state in self.providers.state.values())
 
-    async def has_model(self) -> Optional[bool]:
+    async def has_model(self) -> bool | None:
         """Whether a reachable provider has its model.
 
         False means a server is up but no configured model is pulled on it -
@@ -265,8 +267,8 @@ speak English."""
     async def chat(
         self,
         user_message: str,
-        on_text: Optional[Callable[[str], None]] = None,
-    ) -> Dict[str, Any]:
+        on_text: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
         """
         Send a user message to the LLM and get its reply.
 
@@ -284,8 +286,8 @@ speak English."""
         return await self._generate(on_text)
 
     async def continue_after_tools(
-        self, on_text: Optional[Callable[[str], None]] = None
-    ) -> Dict[str, Any]:
+        self, on_text: Callable[[str], None] | None = None
+    ) -> dict[str, Any]:
         """
         Ask the model to carry on from the tool results already in history.
 
@@ -298,8 +300,8 @@ speak English."""
         return await self._generate(on_text)
 
     async def _generate(
-        self, on_text: Optional[Callable[[str], None]] = None
-    ) -> Dict[str, Any]:
+        self, on_text: Callable[[str], None] | None = None
+    ) -> dict[str, Any]:
         """Run one model turn against the current history.
 
         Streamed, so a caller can start speaking the first sentence while the
@@ -312,11 +314,11 @@ speak English."""
         the user has already heard the start of the answer, and saying it
         again in another model's words would be worse than stopping.
         """
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
         spoken = ""
 
         for provider in await self.providers.candidates():
-            parts: List[str] = []
+            parts: list[str] = []
             try:
                 tool_calls = await self._stream_turn(provider, on_text, parts)
             except Exception as e:
@@ -343,9 +345,9 @@ speak English."""
     async def _stream_turn(
         self,
         provider: ProviderConfig,
-        on_text: Optional[Callable[[str], None]],
-        parts: List[str],
-    ) -> List[Any]:
+        on_text: Callable[[str], None] | None,
+        parts: list[str],
+    ) -> list[Any]:
         """Stream one turn from one provider, collecting text into ``parts``.
 
         ``parts`` is filled as the answer arrives rather than returned, so a
@@ -364,7 +366,7 @@ speak English."""
             }
         )
 
-        tool_calls: List[Any] = []
+        tool_calls: list[Any] = []
         async for chunk in stream:
             message = chunk.get("message", {}) or {}
 
@@ -386,9 +388,9 @@ speak English."""
     def _generation_failed(
         self,
         spoken: str,
-        error: Optional[Exception],
-        on_text: Optional[Callable[[str], None]],
-    ) -> Dict[str, Any]:
+        error: Exception | None,
+        on_text: Callable[[str], None] | None,
+    ) -> dict[str, Any]:
         """Apologise once, in the same channel as any other text."""
         logger.error(f"No LLM provider could answer: {error}")
         apology = "I'm sorry, I encountered an error processing your request."
@@ -402,8 +404,8 @@ speak English."""
         return {"response": apology, "tool_calls": None}
 
     def available_tools(
-        self, provider: Optional[ProviderConfig] = None
-    ) -> List[Dict[str, Any]]:
+        self, provider: ProviderConfig | None = None
+    ) -> list[dict[str, Any]]:
         """Function schemas to offer the model this turn.
 
         Narrowed to the tools relevant to the utterance once there are enough
@@ -439,7 +441,7 @@ speak English."""
             )
         return schemas
 
-    def _recent_context(self) -> List[str]:
+    def _recent_context(self) -> list[str]:
         """Recent conversation text, to give a bare follow-up something to
         match on: "and delete it" names no tool of its own."""
         return [

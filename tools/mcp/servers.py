@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from loguru import logger
 
@@ -27,7 +27,7 @@ class Trust(str, Enum):
     READONLY = "readonly"
 
     @classmethod
-    def parse(cls, value: Any) -> "Trust":
+    def parse(cls, value: Any) -> Trust:
         try:
             return cls(str(value).strip().lower())
         except ValueError:
@@ -51,14 +51,14 @@ class ServerConfig:
     enabled: bool = True
 
     # stdio
-    command: Optional[str] = None
-    args: List[str] = field(default_factory=list)
-    env: Dict[str, str] = field(default_factory=dict)
-    cwd: Optional[str] = None
+    command: str | None = None
+    args: list[str] = field(default_factory=list)
+    env: dict[str, str] = field(default_factory=dict)
+    cwd: str | None = None
 
     # http / sse
-    url: Optional[str] = None
-    headers: Dict[str, str] = field(default_factory=dict)
+    url: str | None = None
+    headers: dict[str, str] = field(default_factory=dict)
     timeout: float = 30.0
 
 
@@ -66,7 +66,7 @@ class ConfigError(ValueError):
     """The configuration file cannot be used as written."""
 
 
-def _parse_entry(name: str, entry: Dict[str, Any]) -> ServerConfig:
+def _parse_entry(name: str, entry: dict[str, Any]) -> ServerConfig:
     if not isinstance(entry, dict):
         raise ConfigError(f"server '{name}': expected an object")
 
@@ -108,7 +108,7 @@ def _parse_entry(name: str, entry: Dict[str, Any]) -> ServerConfig:
     )
 
 
-def load_servers(path: Union[str, Path]) -> List[ServerConfig]:
+def load_servers(path: str | Path) -> list[ServerConfig]:
     """Read the server list. A missing file simply means no MCP servers.
 
     A malformed *entry* is skipped with a warning rather than taking the whole
@@ -130,7 +130,7 @@ def load_servers(path: Union[str, Path]) -> List[ServerConfig]:
         logger.error(f"{config_path}: expected an 'mcpServers' object")
         return []
 
-    servers: List[ServerConfig] = []
+    servers: list[ServerConfig] = []
     for name, entry in entries.items():
         try:
             servers.append(_parse_entry(str(name), entry))

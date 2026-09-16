@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from typing import Any, List, Optional, Tuple
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -53,7 +53,7 @@ class WebTools:
         self.max_bytes = max_bytes
         self.timeout = timeout
 
-    def _check_url(self, url: str) -> Tuple[bool, str]:
+    def _check_url(self, url: str) -> tuple[bool, str]:
         """Validate one URL before any request is made to it."""
         try:
             parsed = urlparse(url)
@@ -88,13 +88,13 @@ class WebTools:
 
         return True, ""
 
-    def _read_capped(self, response: requests.Response) -> Tuple[str, bool]:
+    def _read_capped(self, response: requests.Response) -> tuple[str, bool]:
         """Read at most ``max_bytes`` of the body."""
         declared = response.headers.get("Content-Length")
         if declared and declared.isdigit() and int(declared) > self.max_bytes:
             return "", True
 
-        chunks: List[bytes] = []
+        chunks: list[bytes] = []
         total = 0
         truncated = False
         for chunk in response.iter_content(CHUNK_SIZE):
@@ -192,7 +192,7 @@ def _url_precheck(allow_private_network: bool):
     already an address literal. Resolving a name is left to the handler, so
     policy evaluation stays fast and side-effect free.
     """
-    def check(arguments: dict) -> Optional[str]:
+    def check(arguments: dict) -> str | None:
         raw = str(arguments.get("url") or "").strip()
         if not raw:
             return "url is required"
@@ -236,7 +236,7 @@ def build_tools(
     allow_private_network: bool = False,
     max_bytes: int = 2_000_000,
     timeout: int = 10,
-) -> List[ToolSpec]:
+) -> list[ToolSpec]:
     """Build the web tools."""
     web = WebTools(allow_private_network, max_bytes, timeout)
     return [

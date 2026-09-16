@@ -1,6 +1,5 @@
 """Tests for tool descriptions and schema conversion (tools/schema.py)."""
 
-import pytest
 
 from tools.schema import (
     NAMESPACE_SEPARATOR,

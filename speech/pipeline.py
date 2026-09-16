@@ -13,7 +13,8 @@ only works if somebody owns the queue.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 from loguru import logger
 
@@ -31,7 +32,7 @@ class SpeechPipeline:
         self,
         tts: Any,
         audio: Any,
-        on_fallback: Optional[Callable[[str], None]] = None,
+        on_fallback: Callable[[str], None] | None = None,
     ):
         self.tts = tts
         self.audio = audio
@@ -40,12 +41,12 @@ class SpeechPipeline:
 
         self._text: asyncio.Queue = asyncio.Queue()
         self._audio: asyncio.Queue = asyncio.Queue(maxsize=AUDIO_QUEUE_SIZE)
-        self._workers: List[asyncio.Task] = []
+        self._workers: list[asyncio.Task] = []
         self._interrupted = asyncio.Event()
         self._idle = asyncio.Event()
         self._idle.set()
         self._pending = 0
-        self.spoken: List[str] = []
+        self.spoken: list[str] = []
 
     # -- lifecycle -------------------------------------------------------- #
 
@@ -67,7 +68,7 @@ class SpeechPipeline:
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers = []
 
-    async def __aenter__(self) -> "SpeechPipeline":
+    async def __aenter__(self) -> SpeechPipeline:
         await self.start()
         return self
 
@@ -159,7 +160,7 @@ class SpeechPipeline:
 
     async def _play_loop(self) -> None:
         while True:
-            item: Tuple[str, Any, int] = await self._audio.get()
+            item: tuple[str, Any, int] = await self._audio.get()
             self._audio.task_done()
             if item is _STOP:
                 return

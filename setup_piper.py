@@ -17,7 +17,6 @@ import tarfile
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple
 
 PIPER_VERSION = "1.2.0"
 RELEASE_BASE = f"https://github.com/rhasspy/piper/releases/download/v{PIPER_VERSION}"
@@ -46,7 +45,7 @@ class Voice:
 
 #: Verified against the published releases. A mismatch means the file is not
 #: the one these digests were taken from, whatever the reason.
-BINARIES: Dict[Tuple[str, str], Artefact] = {
+BINARIES: dict[tuple[str, str], Artefact] = {
     ("Linux", "x86_64"): Artefact(
         f"{RELEASE_BASE}/piper_amd64.tar.gz",
         "467c17935d2a22dcce9dc9e08ba07485e29be813097e7cf08c5627aa09d32e42",
@@ -57,7 +56,7 @@ BINARIES: Dict[Tuple[str, str], Artefact] = {
     ),
 }
 
-VOICES: Dict[str, Voice] = {
+VOICES: dict[str, Voice] = {
     "en_US-lessac-medium": Voice(
         model=Artefact(
             f"{VOICE_BASE}/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
@@ -187,7 +186,7 @@ def install_voice(name: str, models_dir: Path) -> Path:
     return model
 
 
-def setup_piper(voice: str = DEFAULT_VOICE, piper_dir: Optional[Path] = None) -> bool:
+def setup_piper(voice: str = DEFAULT_VOICE, piper_dir: Path | None = None) -> bool:
     """Install the binary and one voice. Returns whether it worked."""
     if voice not in VOICES:
         print(f"Unknown voice: {voice}. Known voices: {', '.join(sorted(VOICES))}")

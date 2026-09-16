@@ -16,8 +16,10 @@ from setup_piper import (
     VerificationError,
     extract_safely,
     fetch_verified,
-    setup_piper as install,
     sha256_of,
+)
+from setup_piper import (
+    setup_piper as install,
 )
 
 BINARY_PAYLOAD = b"#!/bin/sh\necho piper 1.2.0\n"

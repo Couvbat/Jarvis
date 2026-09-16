@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from typing import Any, Dict, Iterable, List, Optional
+from collections.abc import Iterable
+from typing import Any
 
 from loguru import logger
 
@@ -23,7 +24,7 @@ class ToolRegistry:
     """Holds the tool specs and dispatches calls to them."""
 
     def __init__(self):
-        self._tools: Dict[str, ToolSpec] = {}
+        self._tools: dict[str, ToolSpec] = {}
 
     def register(self, spec: ToolSpec) -> ToolSpec:
         """Add a tool. Names are unique: silent shadowing would be a trapdoor."""
@@ -46,19 +47,19 @@ class ToolRegistry:
             del self._tools[name]
         return len(removed)
 
-    def get(self, name: str) -> Optional[ToolSpec]:
+    def get(self, name: str) -> ToolSpec | None:
         """The spec for a tool, or None if nothing is registered under it."""
         return self._tools.get(name)
 
-    def names(self) -> List[str]:
+    def names(self) -> list[str]:
         """Every registered tool name, in registration order."""
         return list(self._tools)
 
-    def specs(self) -> List[ToolSpec]:
+    def specs(self) -> list[ToolSpec]:
         """Every registered spec, in registration order."""
         return list(self._tools.values())
 
-    def describe(self, names: Optional[Iterable[str]] = None) -> List[Dict[str, Any]]:
+    def describe(self, names: Iterable[str] | None = None) -> list[dict[str, Any]]:
         """Function schemas for the model.
 
         ``names`` selects a subset, which is how Phase 2 will present only the
@@ -71,7 +72,7 @@ class ToolRegistry:
         return [to_ollama_schema(spec) for spec in selected]
 
     async def call(
-        self, name: str, arguments: Optional[Dict[str, Any]] = None
+        self, name: str, arguments: dict[str, Any] | None = None
     ) -> ToolResult:
         """Run a tool and return its result.
 

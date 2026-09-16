@@ -3,24 +3,25 @@
 import argparse
 import asyncio
 import sys
+
 from loguru import logger
-from config import settings
+
 from audio_handler import AudioHandler
+from config import settings
 from conversation_store import ConversationStore
-from stt_module import STTModule
 from llm_module import LLMModule
 from policy.engine import PolicyEngine, Surface
 from policy.store import ApprovalStore
 from policy.taint import TaintState
-from tools.builtin import attach_mcp_tools, build_default_registry, build_mcp_manager
 from speech.barge_in import VAD_FRAME_MS, BargeInListener
 from speech.chunker import SentenceChunker
 from speech.pipeline import SpeechPipeline
+from stt_module import STTModule
 from text_utils import normalise
+from tools.builtin import attach_mcp_tools, build_default_registry, build_mcp_manager
 from tools.schema import ToolResult
 from tts_module import TTSModule
 from tui import JarvisTUI
-
 
 #: Utterances that end the session. Matched against the whole normalised
 #: utterance, never as a substring: "stop" appears in plenty of requests that
@@ -60,7 +61,7 @@ def is_exit_command(text: str) -> bool:
 
 class Jarvis:
     """Main voice assistant orchestrator."""
-    
+
     def __init__(
         self,
         use_tui: bool = False,
@@ -71,13 +72,13 @@ class Jarvis:
         self.speak_aloud = speak_aloud
         self.resume = resume
         self.tui = None
-        
+
         if self.use_tui:
             self.tui = JarvisTUI()
             self.tui.show_welcome()
-        
+
         logger.info("Initializing Jarvis...")
-        
+
         # Tools and the policy that gates them
         self.registry = build_default_registry()
         self.mcp = build_mcp_manager()
@@ -96,13 +97,13 @@ class Jarvis:
         self.speech = SpeechPipeline(self.tts, self.audio, on_fallback=self._show)
         #: Audio captured by an interruption, to start the next turn with.
         self._carried_audio = None
-        
+
         logger.info("Jarvis initialized and ready!")
-        
+
         if self.use_tui:
             self.tui.update_status("Ready")
             self.tui.update_language(settings.whisper_language)
-    
+
     def _confirm(self, decision) -> tuple[bool, bool]:
         """Ask the user about one call.
 
@@ -449,15 +450,15 @@ class Jarvis:
         else:
             self.tui.start()
             self.tui.add_system_message("Voice assistant started. Speak your commands!")
-        
+
         try:
             while True:
                 if not self.use_tui:
                     logger.info("\n--- Ready for your command ---")
-                
+
                 if self.use_tui:
                     self.tui.update_status("Listening...")
-                
+
                 # Record audio
                 try:
                     carried, self._carried_audio = self._carried_audio, None
@@ -467,13 +468,13 @@ class Jarvis:
                         max_duration=30.0,
                         prefix=carried,
                     )
-                    
+
                     if len(audio_data) < 1000:  # Too short
                         logger.warning("Recording too short, skipping...")
                         if self.use_tui:
                             self.tui.update_status("Ready")
                         continue
-                    
+
                 except KeyboardInterrupt:
                     logger.info("\nExiting...")
                     break
@@ -483,79 +484,79 @@ class Jarvis:
                         self.tui.add_system_message(f"Recording error: {e}")
                         self.tui.update_status("Ready")
                     continue
-                
+
                 # Transcribe
                 if self.use_tui:
                     self.tui.update_status("Transcribing...")
-                
+
                 try:
                     user_text = await asyncio.to_thread(
                         self.stt.transcribe, audio_data, self.audio.sample_rate
                     )
-                    
+
                     if not user_text or len(user_text.strip()) < 2:
                         logger.info("No speech detected, try again...")
                         if self.use_tui:
                             self.tui.update_status("Ready")
                         continue
-                    
+
                     logger.info(f"You said: {user_text}")
-                    
+
                     if self.use_tui:
                         self.tui.add_user_message(user_text)
-                    
+
                 except Exception as e:
                     logger.error(f"Transcription error: {e}")
                     if self.use_tui:
                         self.tui.add_system_message(f"Transcription error: {e}")
                         self.tui.update_status("Ready")
                     continue
-                
+
                 if await self.handle_language_switch(user_text):
                     if self.use_tui:
                         self.tui.update_status("Ready")
                     continue
-                
+
                 # Check for exit commands
                 if is_exit_command(user_text):
                     logger.info("Exit command detected")
                     response_text = "Goodbye!" if self.stt.language == "en" else "Au revoir!"
-                    
+
                     if self.use_tui:
                         self.tui.add_assistant_message(response_text)
                         self.tui.update_status("Shutting down...")
-                    
+
                     # Speak goodbye
                     await self._speak(response_text)
-                    
+
                     break
-                
+
                 # Process with LLM and tools
                 try:
                     response_text = await self.process_user_input(user_text)
-                    
+
                     if not response_text:
                         response_text = "I'm not sure how to respond to that."
-                    
+
                     logger.info(f"Jarvis: {response_text}")
-                    
+
                     if self.use_tui:
                         self.tui.add_assistant_message(response_text)
-                    
+
                 except Exception as e:
                     logger.error(f"Processing error: {e}")
                     await self._speak("I encountered an error processing your request.")
-                
+
                 # The answer was spoken sentence by sentence as it arrived;
                 # wait for the tail before listening again - unless the user
                 # talks over it, which ends this turn and starts the next.
                 if self.use_tui:
                     self.tui.update_status("Speaking...")
                 await self._finish_speaking()
-                
+
                 if self.use_tui:
                     self.tui.update_status("Ready")
-        
+
         except KeyboardInterrupt:
             logger.info("\n\nShutting down Jarvis...")
         except Exception as e:
@@ -565,7 +566,7 @@ class Jarvis:
             await self.aclose()
             if self.use_tui:
                 self.tui.stop()
-    
+
     async def run_text_mode(self):
         """Run in text-only mode (no voice I/O)."""
         self.speak_aloud = False
@@ -574,37 +575,37 @@ class Jarvis:
         logger.info("Jarvis Voice Assistant - Text Mode")
         logger.info("Type 'exit' to quit")
         logger.info("="*50 + "\n")
-        
+
         try:
             while True:
                 # Get text input
                 try:
                     user_text = (await asyncio.to_thread(input, "\nYou: ")).strip()
-                    
+
                     if not user_text:
                         continue
-                    
+
                     if is_exit_command(user_text):
                         print("Jarvis: Goodbye!")
                         break
 
                     if await self.handle_language_switch(user_text):
                         continue
-                    
+
                 except KeyboardInterrupt:
                     print("\n\nJarvis: Goodbye!")
                     break
-                
+
                 # Process
                 try:
                     print("\nJarvis: ", end="", flush=True)
                     await self.process_user_input(user_text)
                     print()
-                    
+
                 except Exception as e:
                     logger.error(f"Processing error: {e}")
                     print(f"\nJarvis: I encountered an error: {str(e)}")
-        
+
         except Exception as e:
             logger.error(f"Fatal error: {e}")
             raise
