@@ -3,9 +3,21 @@
 import pytest
 
 from llm_module import ConversationHistory, LLMModule
+from llm_providers import ProviderConfig, ProviderPool
 from tests._stubs import make_chat_response, make_tool_call
 from tools.registry import ToolRegistry
 from tools.schema import Risk, ToolResult, ToolSpec
+
+
+@pytest.fixture
+def log_lines():
+    """Everything Jarvis logs during the test, as plain strings."""
+    from loguru import logger
+
+    lines: list = []
+    sink = logger.add(lines.append, level="DEBUG")
+    yield lines
+    logger.remove(sink)
 
 
 def make_registry(*names):
@@ -162,7 +174,8 @@ class TestLLMModuleSetup:
         module-level ollama.chat() builds its own client from the process
         environment, so pointing .env at another machine did nothing."""
         settings.ollama_host = "http://otherbox:11434"
-        LLMModule()
+        module = LLMModule()
+        module.providers.client_for(module.providers.preferred)
         assert fake_ollama.hosts == ["http://otherbox:11434"]
 
     def test_no_registry_means_no_tools(self):
@@ -558,6 +571,237 @@ class TestHealthCheck:
         fake_ollama.list_error = ConnectionError("refused")
         assert await LLMModule().has_model() is None
 
-    async def test_an_empty_listing_cannot_say(self, fake_ollama):
+    async def test_an_empty_listing_is_not_proof_of_absence(self, fake_ollama):
+        """A listing that comes back empty or unreadable must not cost a
+        reachable provider: the turn fails loudly if the model really is
+        missing, whereas skipping a working server falls back for nothing."""
         fake_ollama.models = []
-        assert await LLMModule().has_model() is None
+        assert await LLMModule().has_model() is True
+
+
+class TestProviderFailover:
+    """A self-hosted Ollama on the LAN, with a small model here for when the
+    LAN is not there. The point is that a turn still gets answered."""
+
+    NAS = "http://nas:11434"
+    LOCAL = "http://localhost:11434"
+
+    def module(self, registry=None, **overrides):
+        pool = ProviderPool(
+            [
+                ProviderConfig(
+                    name="nas", host=self.NAS, model="llama3.1:70b",
+                    **overrides.pop("nas", {}),
+                ),
+                ProviderConfig(
+                    name="local", host=self.LOCAL, model="llama3.2:3b",
+                    **overrides.pop("local", {}),
+                ),
+            ],
+            probe_timeout=1.0,
+            recheck_seconds=0.0,
+        )
+        return LLMModule(registry, providers=pool)
+
+    def both_up(self, fake_ollama):
+        fake_ollama.host_models[self.NAS] = ["llama3.1:70b"]
+        fake_ollama.host_models[self.LOCAL] = ["llama3.2:3b"]
+
+    async def test_the_preferred_provider_answers_when_it_is_up(self, fake_ollama):
+        self.both_up(fake_ollama)
+        fake_ollama.responses = [make_chat_response("Bonjour")]
+
+        result = await self.module().chat("salut")
+        assert result["response"] == "Bonjour"
+        assert fake_ollama.chat_hosts == [self.NAS]
+
+    async def test_an_unreachable_provider_is_skipped_before_the_turn(
+        self, fake_ollama
+    ):
+        """The probe already knows the NAS is off, so the turn does not pay a
+        timeout to find out again."""
+        fake_ollama.host_list_errors[self.NAS] = ConnectionError("no route")
+        fake_ollama.host_models[self.LOCAL] = ["llama3.2:3b"]
+        fake_ollama.responses = [make_chat_response("Bonjour")]
+
+        result = await self.module().chat("salut")
+        assert result["response"] == "Bonjour"
+        assert fake_ollama.chat_hosts == [self.LOCAL]
+
+    async def test_a_provider_that_fails_the_call_is_retried_elsewhere(
+        self, fake_ollama
+    ):
+        """It answered the probe and then dropped the request; nothing has been
+        spoken yet, so another provider can take the turn without the user
+        ever knowing."""
+        self.both_up(fake_ollama)
+        fake_ollama.host_chat_errors[self.NAS] = ConnectionError("dropped")
+        fake_ollama.responses = [make_chat_response("Bonjour")]
+
+        spoken = []
+        result = await self.module().chat("salut", on_text=spoken.append)
+
+        assert result["response"] == "Bonjour"
+        assert "".join(spoken) == "Bonjour"
+        assert fake_ollama.chat_hosts == [self.NAS, self.LOCAL]
+
+    async def test_a_failure_after_the_answer_started_is_not_retried(
+        self, fake_ollama
+    ):
+        """The user has already heard the beginning. Saying it again in another
+        model's words would be worse than stopping."""
+        self.both_up(fake_ollama)
+        fake_ollama.responses = [
+            fake_ollama.StreamThenFail("Il est ", ConnectionError("dropped")),
+            make_chat_response("Il est midi"),
+        ]
+
+        spoken = []
+        result = await self.module().chat("quelle heure", on_text=spoken.append)
+
+        assert fake_ollama.chat_hosts == [self.NAS]
+        assert "".join(spoken).startswith("Il est ")
+        assert "error" in result["response"]
+
+    async def test_what_was_spoken_stays_in_the_history(self, fake_ollama):
+        """The record has to match what the user heard, or the next turn
+        contradicts the last one."""
+        self.both_up(fake_ollama)
+        fake_ollama.responses = [
+            fake_ollama.StreamThenFail("Il est ", ConnectionError("dropped")),
+        ]
+
+        module = self.module()
+        await module.chat("quelle heure", on_text=lambda text: None)
+        assistant = [m for m in module.history.turns if m["role"] == "assistant"]
+        assert assistant[-1]["content"].startswith("Il est ")
+
+    async def test_every_provider_failing_apologises_once(self, fake_ollama):
+        self.both_up(fake_ollama)
+        fake_ollama.host_chat_errors[self.NAS] = ConnectionError("dropped")
+        fake_ollama.host_chat_errors[self.LOCAL] = ConnectionError("dropped")
+
+        spoken = []
+        result = await self.module().chat("salut", on_text=spoken.append)
+
+        assert result["tool_calls"] is None
+        assert "error" in result["response"]
+        assert "".join(spoken) == result["response"]
+
+    async def test_the_fallback_is_kept_for_the_next_turn(self, fake_ollama):
+        """Re-probing a NAS that is off, before every answer, costs a timeout
+        per turn."""
+        fake_ollama.host_list_errors[self.NAS] = ConnectionError("no route")
+        fake_ollama.host_models[self.LOCAL] = ["llama3.2:3b"]
+        fake_ollama.responses = [
+            make_chat_response("un"), make_chat_response("deux"),
+        ]
+
+        module = self.module()
+        module.providers.recheck_seconds = 3600
+        await module.chat("salut")
+        await module.chat("encore")
+        assert fake_ollama.chat_hosts == [self.LOCAL, self.LOCAL]
+
+    async def test_the_preferred_provider_is_taken_back_when_it_returns(
+        self, fake_ollama
+    ):
+        """Otherwise one blink of the network strands the session on the small
+        model until it is restarted."""
+        fake_ollama.host_list_errors[self.NAS] = ConnectionError("no route")
+        fake_ollama.host_models[self.LOCAL] = ["llama3.2:3b"]
+        fake_ollama.responses = [
+            make_chat_response("un"), make_chat_response("deux"),
+        ]
+
+        module = self.module()
+        await module.chat("salut")
+
+        del fake_ollama.host_list_errors[self.NAS]
+        fake_ollama.host_models[self.NAS] = ["llama3.1:70b"]
+        await module.chat("encore")
+
+        assert fake_ollama.chat_hosts == [self.LOCAL, self.NAS]
+
+    async def test_the_serving_provider_decides_the_host(self, fake_ollama):
+        """Logs and the startup line should name the machine actually
+        answering, not the one that was configured first."""
+        fake_ollama.host_list_errors[self.NAS] = ConnectionError("no route")
+        fake_ollama.host_models[self.LOCAL] = ["llama3.2:3b"]
+        fake_ollama.responses = [make_chat_response("Bonjour")]
+
+        module = self.module()
+        assert module.host == self.NAS      # before anything has been probed
+        await module.chat("salut")
+        assert module.host == self.LOCAL
+
+    async def test_the_serving_provider_decides_the_model(self, fake_ollama):
+        fake_ollama.host_list_errors[self.NAS] = ConnectionError("no route")
+        fake_ollama.host_models[self.LOCAL] = ["llama3.2:3b"]
+        fake_ollama.responses = [make_chat_response("Bonjour")]
+
+        module = self.module()
+        await module.chat("salut")
+        assert fake_ollama.calls[-1]["model"] == "llama3.2:3b"
+        assert module.model == "llama3.2:3b"
+
+    async def test_a_provider_may_set_its_own_context_window(self, fake_ollama):
+        """A 70B on a NAS with plenty of RAM and a 3B on a laptop do not want
+        the same num_ctx."""
+        self.both_up(fake_ollama)
+        fake_ollama.responses = [make_chat_response("Bonjour")]
+
+        module = self.module(make_registry("fs__read"), nas={"num_ctx": 32768})
+        await module.chat("salut")
+        assert fake_ollama.calls[-1]["options"]["num_ctx"] == 32768
+
+    async def test_a_narrow_context_warns_about_the_tool_schemas(
+        self, fake_ollama, settings, log_lines
+    ):
+        """Tool schemas are re-sent every turn; past half the window they
+        quietly push the conversation out, which is worth saying out loud."""
+        self.both_up(fake_ollama)
+        fake_ollama.responses = [make_chat_response("Bonjour")]
+        settings.llm_num_ctx = 65536
+
+        module = self.module(
+            make_registry("fs__read", "fs__write"), nas={"num_ctx": 16},
+        )
+        await module.chat("salut")
+        assert any("Tool schemas" in line for line in log_lines)
+
+    async def test_a_smaller_model_is_offered_a_smaller_toolbox(self, fake_ollama):
+        """The point of falling back to a 3B is to keep working, not to keep
+        the same tool list it cannot choose from."""
+        fake_ollama.host_list_errors[self.NAS] = ConnectionError("no route")
+        fake_ollama.host_models[self.LOCAL] = ["llama3.2:3b"]
+        fake_ollama.responses = [make_chat_response("Bonjour")]
+
+        registry = make_registry("fs__read", "fs__write", "web__fetch")
+        module = self.module(registry, local={"max_tools": 2})
+        await module.chat("salut")
+        assert len(fake_ollama.calls[-1]["tools"]) == 2
+
+    async def test_the_preferred_model_keeps_the_whole_toolbox(self, fake_ollama):
+        self.both_up(fake_ollama)
+        fake_ollama.responses = [make_chat_response("Bonjour")]
+
+        registry = make_registry("fs__read", "fs__write", "web__fetch")
+        module = self.module(registry, local={"max_tools": 2})
+        await module.chat("salut")
+        assert len(fake_ollama.calls[-1]["tools"]) == 3
+
+
+class TestProviderStatus:
+    async def test_the_serving_provider_is_named(self, fake_ollama, settings):
+        settings.ollama_model = "llama3.1:8b"
+        provider, report = await LLMModule().status()
+        assert provider is not None
+        assert provider.model == "llama3.1:8b"
+        assert report[provider.name] == "ready"
+
+    async def test_nothing_usable_reports_no_provider(self, fake_ollama):
+        fake_ollama.list_error = ConnectionError("refused")
+        provider, report = await LLMModule().status()
+        assert provider is None
+        assert "unreachable" in next(iter(report.values()))

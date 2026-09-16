@@ -61,6 +61,7 @@ src/jarvis/
 │   └── chunker.py        découpage en phrases pour la synthèse en flux
 ├── llm/
 │   ├── client.py         Ollama, streaming, num_ctx
+│   ├── providers.py      fournisseurs ordonnés, sondage, bascule (cf. §6.1)
 │   ├── conversation.py   historique structuré + persistance SQLite
 │   └── agent.py          la boucle de tool calling
 ├── tools/
@@ -289,6 +290,34 @@ réponse trop longue ne peut pas être interrompue autrement qu'au clavier.
 
 ---
 
+### 6.1 Où tourne le modèle
+
+Un Ollama auto-hébergé sur le LAN et un petit modèle sur cette machine ne sont
+pas la même chose, et lequel répond change au cours de la journée. Les
+fournisseurs sont donc une **liste ordonnée** : le premier qui répond *et* qui
+a son modèle sert le tour.
+
+Trois règles, chacune payée par une erreur qu'elle évite :
+
+1. **Retour automatique au préféré.** Sans cela, la première coupure réseau
+   coince la session sur le petit modèle jusqu'au redémarrage. Un sondage est
+   refait au bout de `LLM_PROVIDER_RECHECK_SECONDS` tant qu'on n'est pas sur
+   le fournisseur préféré ; tant qu'on y est, on ne sonde pas (un aller-retour
+   avant chaque réponse, pour rien).
+2. **On ne bascule que sur l'injoignable.** Une réponse qui semble mauvaise
+   n'est jamais un motif de bascule : changer de modèle en silence au milieu
+   d'une conversation est pire que la mauvaise réponse.
+3. **Une fois qu'un fragment est prononcé, le tour est engagé.** Si le serveur
+   tombe en cours de génération, l'utilisateur a déjà entendu le début ; on
+   s'excuse plutôt que de redire la même phrase avec les mots d'un autre
+   modèle. Avant le premier fragment, la bascule est invisible.
+
+Un modèle plus petit reçoit une **boîte à outils plus petite** (`max_tools`) :
+l'intérêt de basculer sur un 3B est de continuer à fonctionner, pas de garder
+une liste d'outils dans laquelle il choisit mal (cf. §4).
+
+---
+
 ## 7. Persistance
 
 | Donnée | Emplacement | Raison |
@@ -296,6 +325,7 @@ réponse trop longue ne peut pas être interrompue autrement qu'au clavier.
 | Conversations | SQLite (`~/.local/share/jarvis/history.db`) | reprise de contexte, base du RAG et des analytics |
 | Approbations | SQLite, même base | l'actuel `command_whitelist.json`, avec horodatage et portée |
 | Configuration serveurs MCP | `mcp_servers.json` | format compatible avec les configurations MCP existantes, donc réutilisable tel quel |
+| Liste des fournisseurs LLM | `.env`, ou `llm_providers.json` au-delà de deux | le cas courant (un distant, un local de secours) ne doit pas exiger un fichier |
 | Embeddings d'outils | cache disque, invalidé au changement de serveur | évite de recalculer au démarrage |
 
 ---

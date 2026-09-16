@@ -195,21 +195,33 @@ class Jarvis:
             logger.error(f"MCP shutdown failed: {e}")
 
     async def _check_llm(self) -> None:
-        """Say plainly when Ollama is not there, instead of once per turn."""
-        if await self.llm.is_available():
-            if await self.llm.has_model() is False:
-                message = (
-                    f"Ollama is running but '{settings.ollama_model}' is not "
-                    f"pulled. Run: ollama pull {settings.ollama_model}"
-                )
-                logger.warning(message)
-                if self.use_tui:
-                    self.tui.add_system_message(message)
+        """Say plainly which provider is answering, and which are not.
+
+        With more than one configured, "Ollama is not running" is no longer
+        the whole story: the useful thing to know at startup is which model
+        will actually reply, and why the preferred one did not.
+        """
+        provider, report = await self.llm.status()
+
+        if provider is not None:
+            message = f"LLM: {provider.describe()}"
+            others = [
+                f"{name} ({detail})"
+                for name, detail in report.items()
+                if name != provider.name
+            ]
+            if others:
+                message += f" - also configured: {', '.join(others)}"
+            logger.info(message)
+            if self.use_tui:
+                self.tui.add_system_message(message)
             return
 
+        detail = ", ".join(f"{name}: {state}" for name, state in report.items())
         message = (
-            f"Cannot reach Ollama at {settings.ollama_host}. "
-            f"Start it with: ollama serve"
+            f"No LLM provider is usable ({detail}). "
+            f"Start Ollama with: ollama serve, and pull the model with: "
+            f"ollama pull {settings.ollama_model}"
         )
         logger.error(message)
         if self.use_tui:

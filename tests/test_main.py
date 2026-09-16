@@ -56,6 +56,33 @@ class FakeLLM:
     async def has_model(self):
         return self.model_pulled
 
+    #: detail line for a second, configured-but-not-serving provider
+    fallback_detail = None
+
+    async def status(self):
+        """Mirrors LLMModule.status(): the provider that will answer, if any,
+        and what every configured provider reported."""
+        from llm_providers import ProviderConfig
+
+        report = {}
+        if not self.available:
+            report["primary"] = "unreachable: ConnectionError"
+        elif not self.model_pulled:
+            report["primary"] = "reachable, but 'llama3.1:8b' is not pulled"
+        else:
+            report["primary"] = "ready"
+        if self.fallback_detail is not None:
+            report["fallback"] = self.fallback_detail
+
+        if report["primary"] != "ready":
+            return None, report
+        return (
+            ProviderConfig(
+                name="primary", host="http://localhost:11434", model="llama3.1:8b"
+            ),
+            report,
+        )
+
     def resume(self, conversation_id=None):
         return 0
 
@@ -557,7 +584,7 @@ class TestLanguageSwitching:
 class TestOllamaHealth:
     async def test_a_reachable_server_says_nothing(self, jarvis, wiring, capsys):
         await jarvis._check_llm()
-        assert "Cannot reach" not in capsys.readouterr().out
+        assert "No LLM provider" not in capsys.readouterr().out
 
     async def test_an_unreachable_server_is_reported_once(self, jarvis, wiring, capsys):
         """Otherwise a stopped Ollama is just a spoken apology per turn, which
@@ -565,14 +592,49 @@ class TestOllamaHealth:
         wiring["llm"].available = False
         await jarvis._check_llm()
         output = capsys.readouterr().out
-        assert "Cannot reach Ollama" in output
+        assert "No LLM provider is usable" in output
+        assert "unreachable" in output
         assert "ollama serve" in output
 
-    async def test_a_missing_model_is_reported(self, jarvis, wiring, caplog):
+    async def test_a_missing_model_is_reported(self, jarvis, wiring, capsys):
+        """A server that is up without its model cannot answer either, and the
+        fix is a different command."""
         wiring["llm"].model_pulled = False
         await jarvis._check_llm()
-        # Reported through the logger, which the TUI mirrors.
-        assert wiring["llm"].model_pulled is False
+        output = capsys.readouterr().out
+        assert "not pulled" in output
+        assert "ollama pull" in output
+
+    async def test_the_serving_provider_is_named_in_the_tui(self, tui_jarvis, wiring):
+        """With two providers configured, which model is answering is the
+        thing worth knowing at startup."""
+        await tui_jarvis._check_llm()
+        messages = [
+            payload for name, payload in tui_jarvis._tui.events
+            if name == "add_system_message"
+        ]
+        assert any("llama3.1:8b" in str(payload) for payload in messages)
+
+    async def test_the_other_providers_are_listed_too(self, tui_jarvis, wiring):
+        """"Falling back" is only useful information if you can see what the
+        preferred provider is doing instead."""
+        wiring["llm"].fallback_detail = "unreachable: ConnectionError"
+        await tui_jarvis._check_llm()
+        messages = [
+            str(payload) for name, payload in tui_jarvis._tui.events
+            if name == "add_system_message"
+        ]
+        assert any("fallback" in text and "unreachable" in text
+                   for text in messages)
+
+    async def test_a_failure_reaches_the_tui_too(self, tui_jarvis, wiring):
+        wiring["llm"].available = False
+        await tui_jarvis._check_llm()
+        messages = [
+            str(payload) for name, payload in tui_jarvis._tui.events
+            if name == "add_system_message"
+        ]
+        assert any("No LLM provider is usable" in text for text in messages)
 
     async def test_startup_checks_the_server(self, jarvis, wiring, monkeypatch):
         checked = []

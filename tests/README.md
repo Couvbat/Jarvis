@@ -22,19 +22,25 @@ n'est pas sérialisable en JSON comme les modèles Pydantic du vrai client
 ollama. C'est ce qui permet à la suite de mettre BUG-18 et BUG-08 en évidence
 plutôt que de les masquer.
 
+La doublure `ollama` se scripte **par hôte** (`host_models`,
+`host_list_errors`, `host_chat_errors`), et `chat_hosts` / `list_hosts`
+enregistrent qui a été appelé : un ensemble de fournisseurs n'est intéressant
+que lorsque l'un répond et l'autre non. `StreamThenFail` fait tomber le
+serveur *en cours* de génération, ce qui n'est pas la même panne qu'un serveur
+absent — une partie de la réponse a déjà été prononcée.
+
 ## Bugs connus = tests `xfail(strict=True)`
 
-Chaque anomalie de [`../AUDIT.md`](../AUDIT.md) a un test marqué
+Chaque anomalie de [`../AUDIT.md`](../AUDIT.md) avait un test marqué
 `xfail(strict=True)` portant son identifiant `BUG-xx`.
 
-- Tant que le bug existe, le test échoue → `xfail` → la suite reste verte.
-- Dès que le bug est corrigé, le test réussit → `XPASS` → **la suite échoue**,
-  ce qui force à retirer le marqueur dans le même commit que le correctif.
+- Tant que le bug existait, le test échouait → `xfail` → la suite restait verte.
+- Dès que le bug était corrigé, le test réussissait → `XPASS` → **la suite
+  échouait**, ce qui forçait à retirer le marqueur dans le même commit que le
+  correctif.
 
-Corriger un bug se fait donc en trois gestes : écrire le correctif, retirer
-le `@pytest.mark.xfail`, vérifier que le test passe.
-
-`pytest -rx` liste les 38 marqueurs en cours avec leur motif.
+Les 34 anomalies sont closes : **il ne reste aucun marqueur `xfail`**. Le
+mécanisme reste la façon d'enregistrer un bug nouvellement trouvé.
 
 ## Fixtures principales (`conftest.py`)
 
@@ -42,8 +48,8 @@ le `@pytest.mark.xfail`, vérifier que le test passe.
 |---|---|
 | `settings` | Le singleton de configuration, restauré après chaque test |
 | `sandbox` | Répertoire temporaire déclaré comme seul `ALLOWED_DIRECTORIES` |
-| `executor` | `ActionExecutor` sandboxé, whitelist isolée sur disque |
-| `approve_all` / `approve_and_whitelist` / `deny_all` | Rappels de confirmation, avec journal des appels |
+| `isolated_state` | Détourne `DATA_DIR` et `LLM_PROVIDERS_PATH` vers un répertoire temporaire (automatique) |
+| `approve_all` / `approve_and_remember` / `deny_all` | Rappels de confirmation, avec journal des appels |
 | `fake_sd` / `fake_vad` / `fake_whisper` / `fake_ollama` | Les modules doublures, réinitialisés entre chaque test |
 | `clean_env` | Retire toutes les variables Jarvis pour observer les défauts déclarés |
 
@@ -53,5 +59,5 @@ le `@pytest.mark.xfail`, vérifier que le test passe.
   la méthode appelée.
 - Aucun test n'écrit dans le dépôt : tout passe par `tmp_path`.
 - Les tests d'intégration (`test_integration.py`) utilisent les vrais
-  `LLMModule`, `ActionExecutor` et `Jarvis` ; seules les frontières de
+  `LLMModule`, le vrai registre d'outils et `Jarvis` ; seules les frontières de
   processus sont simulées.
