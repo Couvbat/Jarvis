@@ -60,6 +60,13 @@ mécanisme reste la façon d'enregistrer un bug nouvellement trouvé.
 | `fake_sd` / `fake_vad` / `fake_whisper` / `fake_ollama` | Les modules doublures, réinitialisés entre chaque test |
 | `clean_env` | Retire toutes les variables Jarvis pour observer les défauts déclarés |
 
+## Ce que la suite ne couvre pas
+
+Qualité réelle de transcription, intelligibilité de la voix, latence mesurée,
+micro physique, vrai serveur Ollama (local ou distant), vrais serveurs MCP
+tiers, barge-in au casque. Tout cela suppose du matériel ou des poids de
+modèles : voir [`../TESTING.md`](../TESTING.md).
+
 ## Conventions
 
 - Un test = une affirmation. Les noms décrivent le comportement attendu, pas
