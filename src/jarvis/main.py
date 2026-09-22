@@ -5,6 +5,7 @@ import asyncio
 import sys
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 
@@ -15,6 +16,7 @@ from jarvis.llm_module import LLMModule
 from jarvis.policy.engine import PolicyEngine, Surface
 from jarvis.policy.store import ApprovalStore
 from jarvis.policy.taint import TaintState
+from jarvis.reminders import ReminderStore
 from jarvis.speech.barge_in import VAD_FRAME_MS, BargeInListener
 from jarvis.speech.chunker import SentenceChunker
 from jarvis.speech.pipeline import SpeechPipeline
@@ -100,6 +102,14 @@ class Jarvis:
         self.speech = SpeechPipeline(self.tts, self.audio, on_fallback=self._show)
         #: Audio captured by an interruption, to start the next turn with.
         self._carried_audio = None
+        self.reminders = (
+            ReminderStore(settings.reminders_path) if settings.reminders else None
+        )
+        #: Reminders already spoken this session. Belt and braces: the loop
+        #: goes back to listening as soon as one is due, so if marking it
+        #: fired ever failed - a locked database, a full disk - Jarvis would
+        #: repeat it until stopped.
+        self._delivered: set[int] = set()
         self.wake = self._build_wake_word()
         #: Until this moment, a follow-up does not need the wake word again.
         self._awake_until = 0.0
@@ -140,6 +150,54 @@ class Jarvis:
 
         logger.info(f"Listening for the {detector.describe()}")
         return detector
+
+    async def _deliver_due_reminders(self) -> int:
+        """Say anything that has come due. Returns how many.
+
+        Called between turns rather than from a timer: speaking over a
+        recording would put Jarvis's own voice into the microphone, which is
+        the problem barge-in exists for. A few seconds late is not noticed;
+        being talked over is.
+        """
+        if self.reminders is None:
+            return 0
+
+        try:
+            due = self.reminders.due()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.error(f"Could not read the reminders: {e}")
+            return 0
+
+        due = [r for r in due if r.id not in self._delivered]
+        for reminder in due:
+            self._delivered.add(reminder.id)
+            late = datetime.now(timezone.utc) - reminder.due_at
+            # Said out loud, because a reminder that arrives late without
+            # saying so is a reminder that arrives wrong.
+            prefix = (
+                "While you were away, a reminder: " if late > timedelta(minutes=5)
+                else "Reminder: "
+            )
+            message = f"{prefix}{reminder.text}"
+            logger.info(message)
+            if self.use_tui:
+                self.tui.add_assistant_message(message)
+            await self._speak(message)
+            try:
+                self.reminders.mark_fired(reminder.id)
+            except Exception as e:  # pragma: no cover - defensive
+                logger.error(f"Could not mark reminder {reminder.id} fired: {e}")
+
+        return len(due)
+
+    def _reminder_is_due(self) -> bool:
+        """Whether waiting for the wake word should stop and deliver one."""
+        if self.reminders is None:
+            return False
+        try:
+            return any(r.id not in self._delivered for r in self.reminders.due())
+        except Exception:  # pragma: no cover - defensive
+            return False
 
     def _needs_wake_word(self) -> bool:
         """Whether this turn has to be woken, or follows one that was."""
@@ -230,6 +288,8 @@ class Jarvis:
             if self.use_tui:
                 self.tui.add_system_message(message)
 
+        self._report_reminders()
+
         try:
             await attach_mcp_tools(self.registry, self.mcp)
         except Exception as e:
@@ -256,6 +316,35 @@ class Jarvis:
             await self.mcp.stop()
         except Exception as e:  # pragma: no cover - reported by the manager
             logger.error(f"MCP shutdown failed: {e}")
+
+    def _report_reminders(self) -> None:
+        """Say what is waiting, at startup.
+
+        Anything that came due while Jarvis was off is delivered by the loop;
+        this is the rest, so a session starts by knowing what it owes.
+        """
+        if self.reminders is None:
+            return
+
+        try:
+            pending = self.reminders.pending()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.error(f"Could not read the reminders: {e}")
+            return
+
+        if not pending:
+            return
+
+        overdue = len(self.reminders.due())
+        message = f"{len(pending)} reminder(s) scheduled"
+        if overdue:
+            message += f", {overdue} of them due"
+        else:
+            message += f"; next: {pending[0].describe()}"
+
+        logger.info(message)
+        if self.use_tui:
+            self.tui.add_system_message(message)
 
     async def _check_llm(self) -> None:
         """Say plainly which provider is answering, and which are not.
@@ -518,6 +607,8 @@ class Jarvis:
                 if not self.use_tui:
                     logger.info("\n--- Ready for your command ---")
 
+                await self._deliver_due_reminders()
+
                 # Record audio
                 try:
                     carried, self._carried_audio = self._carried_audio, None
@@ -529,15 +620,22 @@ class Jarvis:
                             )
                         # What follows the phrase in the same breath becomes
                         # the start of the recording, so a command does not
-                        # have to be said twice.
+                        # have to be said twice. A reminder coming due also
+                        # ends the wait - otherwise a hands-free session that
+                        # nobody speaks to never delivers one.
                         carried = await asyncio.to_thread(
                             self.audio.wait_for_wake,
                             self.wake,
                             tail=settings.wake_word_tail,
-                            should_stop=self._shutdown.is_set,
+                            poll=settings.reminder_poll_seconds,
+                            should_stop=lambda: (
+                                self._shutdown.is_set() or self._reminder_is_due()
+                            ),
                         )
                         if self._shutdown.is_set():
                             break
+                        if len(carried) == 0 and self._reminder_is_due():
+                            continue
 
                     if self.use_tui:
                         self.tui.update_status("Listening...")
@@ -663,6 +761,8 @@ class Jarvis:
 
         try:
             while True:
+                await self._deliver_due_reminders()
+
                 # Get text input
                 try:
                     user_text = (await asyncio.to_thread(input, "\nYou: ")).strip()

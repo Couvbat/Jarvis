@@ -7,9 +7,9 @@ Architecture visée : [`ARCHITECTURE.md`](ARCHITECTURE.md).
 Campagne manuelle : [`TESTING.md`](TESTING.md).
 
 > **Phases 0 à 4 livrées**, plus les fournisseurs LLM ordonnés (3.5), le mot
-> d'activation (5.1) et la recherche documentaire (5.2). 1149 tests passants,
-> 0 `xfail`, 97 % de couverture. Le reste de la Phase 5 est un choix de
-> fonctionnalités, pas une dette.
+> d'activation (5.1), la recherche documentaire (5.2) et les rappels (5.3).
+> 1209 tests passants, 0 `xfail`, 97 % de couverture. Le reste de la Phase 5
+> est un choix de fonctionnalités, pas une dette.
 
 **Règle de sortie de chaque tâche** : le ou les tests `xfail(strict)`
 correspondants passent au vert. Un `xfail` strict qui réussit fait échouer
@@ -440,6 +440,7 @@ C'est le principal gain de l'orientation MCP : quatre fonctionnalités estimées
 | Feature | Position | Remarque |
 |---|---|---|
 | #3 Persistance des conversations | **Phase 3** | Prérequis du RAG, des analytics et du multi-utilisateur |
+| #6 Planification et rappels | ✅ **livrée (5.3)** | Ni `schedule` ni APScheduler : la livraison a lieu entre les tours de la boucle existante, et le modèle fait la conversion des dates à la place d'une bibliothèque. |
 | #16 Meilleure récupération sur erreur | Réparti sur 0→3 | Largement traité en chemin |
 | #1 Mot-clé d'activation | ✅ **livrée (5.1)** | openWakeWord, qui tourne en local et livre un modèle `hey_jarvis` pré-entraîné. Porcupine écarté comme prévu : une clé d'API Picovoice est exactement ce que « 100 % local » exclut. |
 | #2 RAG documentaire | ✅ **livrée (5.2)** | Le partage d'embeddings avec la sélection d'outils n'a jamais eu lieu : 2.4 a finalement été lexicale. Les embeddings viennent donc d'Ollama (`nomic-embed-text`), ce qui coûte zéro dépendance Python là où `sentence-transformers` aurait coûté torch. |
@@ -535,6 +536,53 @@ vrai modèle d'embedding. Section 9 de [`TESTING.md`](TESTING.md).
 
 ---
 
+## Phase 5.3 — Rappels ✅ livrée
+
+| Tâche | Détail |
+|---|---|
+| `reminders.py` | SQLite ; `pending`, `due`, annulation, plafond d'ancienneté |
+| `tools/local/schedule.py` | `remind__set`, `remind__list`, `remind__cancel` |
+| Horloge dans l'invite | rafraîchie à chaque tour — une constante serait fausse en quelques heures |
+| Livraison | entre les tours, et en interrompant l'attente du mot d'activation |
+
+**Décisions payées par un test** :
+
+- **Pas de bibliothèque d'analyse de dates.** `dateparser` existe pour
+  transformer « demain à 9 h » en horodatage, mais il y a déjà dans la boucle
+  un modèle de langue dont c'est tout le métier. L'outil reçoit donc un
+  horodatage et le **vérifie** : un rappel dans le passé ou à un an est rendu
+  au modèle pour qu'il recommence, plutôt que posé au mauvais moment.
+- **Les rappels se déclenchent entre les tours, jamais pendant.** Parler
+  par-dessus un enregistrement met la voix de Jarvis dans le micro — c'est le
+  problème pour lequel le barge-in existe et reste désactivé par défaut.
+  Quelques secondes de retard que personne ne remarque, contre un assistant
+  qui vous coupe la parole.
+- **Trois niveaux de risque différents** : poser un rappel est un `WRITE`
+  (un engagement pris en votre nom, mais annulable), lister est pré-approuvé
+  (ce sont vos propres rappels), annuler est `DESTRUCTIVE` — une promesse
+  discrètement abandonnée, et on ne s'en aperçoit qu'à l'heure où elle aurait
+  dû être tenue.
+- **Plafond d'ancienneté d'une semaine.** Se réveiller avec un mois d'arriéré
+  serait pire que de perdre le rappel ; il reste visible dans la liste.
+
+**Trouvé par une mutation** : en retirant `mark_fired`, la suite ne partait
+pas en échec mais en **boucle infinie** — la boucle repart écouter dès qu'un
+rappel est dû, donc un marquage qui échoue (base verrouillée, disque plein)
+aurait fait répéter le rappel jusqu'à l'arrêt. Corrigé par un jeu en mémoire
+des rappels déjà prononcés, avec son test.
+
+**Deux tests qui ne mesuraient rien**, repérés en mutant : l'un vérifiait le
+prédicat d'arrêt *après* l'arrêt (donc toujours vrai), l'autre plaçait un
+rappel déjà dû avant une attente qui ne commence qu'une fois les rappels
+livrés. Le cas réel — un rappel qui échoit *pendant* l'attente — est
+maintenant modélisé par un crochet dans la doublure audio.
+
+**Non vérifiable ici** : si un modèle local calcule juste « demain à 9 h ».
+Section 9 de [`TESTING.md`](TESTING.md), et c'est le vrai risque de cette
+fonctionnalité.
+
+---
+
 ## Charge totale
 
 | Phase | Charge |
@@ -548,6 +596,7 @@ vrai modèle d'embedding. Section 9 de [`TESTING.md`](TESTING.md).
 | **Jusqu'à l'objectif affiché** | **~16 j — livrée** |
 | 5.1 — Mot d'activation | 0,5 j |
 | 5.2 — Recherche documentaire | 1 j |
+| 5.3 — Rappels | 0,5 j |
 
 Phase 5 selon les priorités, la majeure partie étant devenue de la
 configuration.

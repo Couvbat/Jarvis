@@ -145,6 +145,14 @@ class Settings(BaseSettings):
     mcp_connect_timeout: float = 15.0
     mcp_call_timeout: float = 60.0
 
+    # Reminders
+    # Off costs nothing but the three tools; on, reminders survive restarts
+    # and anything that came due while Jarvis was off is delivered at startup.
+    reminders: bool = True
+    # How often the voice loop looks for a reminder that has come due while it
+    # was waiting to be spoken to.
+    reminder_poll_seconds: float = 20.0
+
     # Persistent state
     data_dir: str = "~/.local/share/jarvis"
     # Conversations are written to disk in the clear, on this machine.
@@ -172,6 +180,11 @@ class Settings(BaseSettings):
     def documents_path(self) -> Path:
         """Where the document index is kept."""
         return Path(self.data_dir).expanduser() / "documents.db"
+
+    @property
+    def reminders_path(self) -> Path:
+        """Where scheduled reminders are kept."""
+        return Path(self.data_dir).expanduser() / "reminders.db"
 
     @property
     def rag_extensions_list(self) -> list[str]:

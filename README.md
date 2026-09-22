@@ -16,6 +16,7 @@ A privacy-focused, local-first voice assistant for Linux that runs entirely on y
 - 🔒 **Security**: Sandboxed execution with whitelisted commands and directory restrictions
 - 💬 **Conversation Memory**: Maintains context across multiple interactions
 - 📚 **Document search** (optional): ask questions about your own notes and files, indexed locally
+- ⏰ **Reminders**: "remind me to call the plumber tomorrow at nine", kept across restarts
 
 ## Architecture
 
@@ -219,6 +220,34 @@ Edit [.env](.env) to customize:
   thousand tokens whatever the model's native size, and the tool schemas are
   re-sent every turn.
 
+### Reminders
+
+*"Remind me to call the plumber tomorrow at nine."* *"What have I got
+scheduled?"* *"Cancel the second one."*
+
+Reminders are stored on disk, so they survive a restart, and one that came
+due while Jarvis was off is delivered the next time it starts — prefixed
+"while you were away", because a reminder that arrives late without saying so
+arrives wrong.
+
+Two things worth knowing:
+
+- **No date-parsing library.** `dateparser` exists to turn "demain à 9h" into
+  a timestamp, but there is already a language model in the loop whose whole
+  job is understanding what was said. The current time goes into its
+  instructions, it hands over a timestamp, and the tool *checks* it: a
+  reminder in the past, or a year out, is handed back so the model can try
+  again rather than setting the wrong time. If your model keeps getting the
+  arithmetic wrong, "in 30 minutes" takes a different path that is much
+  harder to get wrong.
+- **They fire between turns, never during one.** Speaking over a recording
+  would put Jarvis's own voice into the microphone — the problem barge-in
+  exists for. So a reminder interrupts the wait for the wake word, or arrives
+  when the current answer finishes. A few seconds late; never talking over
+  you.
+
+Set `REMINDERS=false` to drop the three tools entirely.
+
 ### Searching your own documents
 
 Index your notes once, and Jarvis can answer from them instead of guessing:
@@ -370,6 +399,7 @@ Jarvis/
 │   ├── tui.py                  #   Rich terminal interface
 │   ├── text_utils.py           #   shared normalisation and tokenisation
 │   ├── conversation_store.py   #   conversation history (SQLite)
+│   ├── reminders.py            #   scheduled reminders (SQLite)
 │   ├── setup_piper.py          #   Piper installer (`jarvis-setup-piper`)
 │   ├── speech/                 #   sentence chunking, TTS queue, barge-in, wake word
 │   ├── rag/                    #   document index: chunking, embeddings, search
@@ -426,6 +456,18 @@ python -c "from faster_whisper import WhisperModel; model = WhisperModel('base')
 **Out of memory:**
 - Use a smaller model (`tiny` or `base`)
 - Set `WHISPER_COMPUTE_TYPE=int8`
+
+### Reminder Issues
+
+**It sets the wrong time:** small models are worse at date arithmetic than at
+language. Ask for "in 30 minutes" rather than "at half past" and see whether
+that is reliable; the two go down different paths. A time in the past or more
+than a year out is refused and handed back, so watch for the model retrying.
+
+**A reminder never arrived:** Jarvis has to be running. They fire between
+turns, so one due mid-answer waits for the answer to finish. Anything older
+than a week is not delivered at all — waking up to a backlog would be worse —
+but it stays visible in the list until cancelled.
 
 ### Document Search Issues
 

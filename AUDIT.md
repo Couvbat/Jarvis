@@ -9,8 +9,8 @@ verbatim dans la suite de tests (`tests/`), sous forme de test `xfail(strict)`
 qui passera au vert le jour où le correctif est appliqué.
 
 > **Statut au 22 septembre 2026 — Phases 0 à 4 du plan livrées, plus les
-> fournisseurs LLM ordonnés (3.5), le mot d'activation (5.1) et la recherche
-> documentaire (5.2).**
+> fournisseurs LLM ordonnés (3.5), le mot d'activation (5.1), la recherche
+> documentaire (5.2) et les rappels (5.3).**
 > **Les 34 anomalies de ce rapport sont corrigées et vérifiées par tests.**
 > Il ne reste aucun marqueur `xfail`.
 > Les trois anomalies bloquantes de la §2 et les quatre failles de la §3 sont

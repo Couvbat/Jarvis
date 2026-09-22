@@ -10,7 +10,7 @@ from loguru import logger
 
 from jarvis.config import settings
 from jarvis.policy.paths import PathPolicy
-from jarvis.tools.local import apps, documents, filesystem, web
+from jarvis.tools.local import apps, documents, filesystem, schedule, web
 from jarvis.tools.mcp.adapter import build_specs
 from jarvis.tools.mcp.manager import McpManager
 from jarvis.tools.mcp.servers import load_servers
@@ -33,6 +33,7 @@ def build_default_registry(path_policy: PathPolicy | None = None) -> ToolRegistr
         gui_applications=settings.gui_applications_list,
     ))
     registry.register_all(build_document_tools())
+    registry.register_all(build_reminder_tools())
 
     logger.info(
         f"Registered {len(registry.names())} tools; "
@@ -73,6 +74,22 @@ def build_document_tools() -> list:
         default_limit=settings.rag_top_k,
         min_similarity=settings.rag_min_similarity,
     )
+
+
+def build_reminder_tools() -> list:
+    """The reminder tools, unless reminders are turned off."""
+    if not settings.reminders:
+        return []
+
+    from jarvis.reminders import ReminderStore
+
+    try:
+        store = ReminderStore(settings.reminders_path)
+    except Exception as e:
+        logger.warning(f"Reminders disabled: {e}")
+        return []
+
+    return schedule.build_tools(store)
 
 
 def build_mcp_manager() -> McpManager:

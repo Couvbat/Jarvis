@@ -74,6 +74,7 @@ src/jarvis/
 │   ├── conversation.py   historique structuré + persistance SQLite
 │   └── agent.py          la boucle de tool calling
 ├── rag/                  recherche documentaire (index SQLite + embeddings)
+├── reminders.py          rappels planifiés (SQLite)
 ├── tools/
 │   ├── registry.py       registre unifié, namespacing, dispatch
 │   ├── selection.py      sélection top-k (cf. §4)
