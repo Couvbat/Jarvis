@@ -14,6 +14,7 @@ these tests exist to catch.
 
 import sys
 import types
+import zlib
 from collections.abc import Callable
 from typing import Any
 
@@ -366,6 +367,22 @@ class _AsyncClient:
             return _AsyncStream(response)
         return response
 
+    async def embed(self, model: str = "", input: Any = "", **kwargs: Any) -> Any:
+        """Mirrors ``AsyncClient.embed``: one vector per input, in a response
+        object rather than a bare list."""
+        module = _OLLAMA_MODULE["instance"]
+        texts = [input] if isinstance(input, str) else list(input)
+        module.embed_calls.append({"host": self.host, "model": model,
+                                   "input": texts})
+
+        error = module.host_embed_errors.get(self.host, module.embed_error)
+        if error is not None:
+            raise error
+
+        return SubscriptableModel(
+            embeddings=[module.embedding_for(text) for text in texts]
+        )
+
     async def list(self) -> Any:
         module = _OLLAMA_MODULE["instance"]
         module.list_hosts.append(self.host)
@@ -401,9 +418,36 @@ class _OllamaModule(types.ModuleType):
         self.host_models: dict[str | None, list[str]] = {}
         self.host_list_errors: dict[str | None, Exception] = {}
         self.host_chat_errors: dict[str | None, Exception] = {}
+        #: embedding calls made, and how to answer them
+        self.embed_calls: list[dict] = []
+        self.embed_error: Exception | None = None
+        self.host_embed_errors: dict[str | None, Exception] = {}
+        self.embed_dimensions = 8
+        #: set to return a fixed vector regardless of the text
+        self.embedding_override: list[float] | None = None
         self.AsyncClient = _AsyncClient
         self.StreamThenFail = StreamThenFail
         _OLLAMA_MODULE["instance"] = self
+
+    def embedding_for(self, text: str) -> list:
+        """A deterministic vector for one text.
+
+        Derived from the characters, so texts that share words land near each
+        other and a nearest-neighbour test measures something rather than
+        asserting on noise.
+        """
+        if self.embedding_override is not None:
+            return list(self.embedding_override)
+
+        vector = [0.0] * self.embed_dimensions
+        for word in str(text).lower().split():
+            # crc32, not hash(): PYTHONHASHSEED randomises str hashing per
+            # process, and a doubling stub is no use if it answers differently
+            # on every run.
+            vector[zlib.crc32(word.encode()) % self.embed_dimensions] += 1.0
+        if not any(vector):
+            vector[0] = 1.0
+        return vector
 
     def chat(self, **kwargs: Any) -> Any:
         # The real client serialises the payload immediately; snapshot the
@@ -431,6 +475,11 @@ class _OllamaModule(types.ModuleType):
         self.host_models.clear()
         self.host_list_errors.clear()
         self.host_chat_errors.clear()
+        self.embed_calls.clear()
+        self.host_embed_errors.clear()
+        self.embed_error = None
+        self.embed_dimensions = 8
+        self.embedding_override = None
         self.error = None
         self.list_error = None
         self.models = ["llama3.1:8b"]

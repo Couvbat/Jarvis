@@ -114,6 +114,32 @@ class Settings(BaseSettings):
     max_fetch_bytes: int = 2_000_000
     fetch_timeout: int = 10
 
+    # Document search (RAG)
+    # Embeddings come from Ollama rather than sentence-transformers: it is
+    # already running, so this adds no Python dependency and no torch, and a
+    # self-hosted provider computes them too. `ollama pull nomic-embed-text`.
+    rag_embed_model: str = "nomic-embed-text"
+    # Characters per chunk, and how much each one repeats of the last, so an
+    # answer straddling a boundary is still found from either side.
+    rag_chunk_size: int = 1200
+    rag_chunk_overlap: int = 200
+    # Inputs per embedding request while indexing.
+    rag_batch_size: int = 16
+    # Passages returned by one search.
+    rag_top_k: int = 5
+    # Similarity below which a passage is not worth returning. Nearest-k
+    # always returns something, so without a floor a question the documents
+    # say nothing about comes back with the five least-irrelevant passages,
+    # which the model then summarises confidently. The right value depends on
+    # the embedding model - each has its own baseline for unrelated text - so
+    # the default is off. To calibrate: ask about something you know is not
+    # in your notes and look at the similarities in the answer.
+    rag_min_similarity: float = 0.0
+    # Only text is indexed; a PDF reader would be a dependency and a separate
+    # decision.
+    rag_extensions: str = ".md,.txt,.rst,.org,.markdown,.text"
+    rag_max_file_bytes: int = 2_000_000
+
     # MCP servers
     mcp_config_path: str = "mcp_servers.json"
     mcp_connect_timeout: float = 15.0
@@ -141,6 +167,16 @@ class Settings(BaseSettings):
     def conversations_path(self) -> Path:
         """Where conversation history is kept."""
         return Path(self.data_dir).expanduser() / "conversations.db"
+
+    @property
+    def documents_path(self) -> Path:
+        """Where the document index is kept."""
+        return Path(self.data_dir).expanduser() / "documents.db"
+
+    @property
+    def rag_extensions_list(self) -> list[str]:
+        """Parse the indexable file extensions into a list."""
+        return [e.strip().lower() for e in self.rag_extensions.split(',') if e.strip()]
 
     @property
     def gui_applications_list(self) -> list[str]:

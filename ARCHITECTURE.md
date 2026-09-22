@@ -73,6 +73,7 @@ src/jarvis/
 │   ├── providers.py      fournisseurs ordonnés, sondage, bascule (cf. §6.1)
 │   ├── conversation.py   historique structuré + persistance SQLite
 │   └── agent.py          la boucle de tool calling
+├── rag/                  recherche documentaire (index SQLite + embeddings)
 ├── tools/
 │   ├── registry.py       registre unifié, namespacing, dispatch
 │   ├── selection.py      sélection top-k (cf. §4)

@@ -15,6 +15,7 @@ A privacy-focused, local-first voice assistant for Linux that runs entirely on y
   - Application launching
 - 🔒 **Security**: Sandboxed execution with whitelisted commands and directory restrictions
 - 💬 **Conversation Memory**: Maintains context across multiple interactions
+- 📚 **Document search** (optional): ask questions about your own notes and files, indexed locally
 
 ## Architecture
 
@@ -218,6 +219,53 @@ Edit [.env](.env) to customize:
   thousand tokens whatever the model's native size, and the tool schemas are
   re-sent every turn.
 
+### Searching your own documents
+
+Index your notes once, and Jarvis can answer from them instead of guessing:
+
+```bash
+ollama pull nomic-embed-text
+jarvis-index ~/Documents          # or a single file, or several paths
+jarvis-index --status             # what is indexed, and with which model
+```
+
+Then: *"what did I write about the boiler?"*, *"what's the plumber's
+number?"*, *"summarise my notes from the meeting on Tuesday"*. Answers name
+the files they came from, so you can check them.
+
+Re-run `jarvis-index` whenever your notes change — it only re-reads files
+whose size or timestamp moved, and drops files you deleted. `--force`
+re-embeds everything.
+
+Design notes worth knowing:
+
+- **Embeddings come from Ollama**, not `sentence-transformers`. That would
+  mean torch: a multi-gigabyte install, on a machine already running a
+  language model and a speech recogniser, to do something the model server
+  does natively. This adds no Python dependency at all, and your self-hosted
+  provider computes the embeddings when it is the one answering.
+- **The search is a tool the model calls**, not context stuffed into every
+  turn. "What time is it" should not drag your notes into the prompt.
+- **The path sandbox applies.** `jarvis-index ~/.ssh` is refused, and so is
+  any file matching `DENIED_PATTERNS` inside a directory you did allow —
+  indexing a file puts its contents one similarity match away from the
+  prompt.
+- **Retrieved passages count as untrusted**, which `fs__read` does not. With
+  `fs__read` you named the file; here a similarity score chose it, and your
+  index may hold a README from a cloned repo or a downloaded document that
+  says "ignore your instructions". So a write *after* a document search is
+  confirmed at the keyboard. Searching again is not re-escalated — that is
+  what the origin rule is for.
+- **Text only.** PDFs would mean another dependency and a separate decision;
+  `RAG_EXTENSIONS` says what is indexed.
+
+If a question your notes say nothing about comes back with vaguely related
+passages, set `RAG_MIN_SIMILARITY`. Nearest-k always returns *something*, so
+a floor is the only thing that turns "here are five irrelevant passages" into
+"nothing matched". The right value depends on the embedding model, so it is
+off by default; the similarity of each passage is printed in the answer,
+which is how you find yours.
+
 ### Hands-free activation
 
 Without a wake word Jarvis records, transcribes and answers everything it
@@ -324,6 +372,7 @@ Jarvis/
 │   ├── conversation_store.py   #   conversation history (SQLite)
 │   ├── setup_piper.py          #   Piper installer (`jarvis-setup-piper`)
 │   ├── speech/                 #   sentence chunking, TTS queue, barge-in, wake word
+│   ├── rag/                    #   document index: chunking, embeddings, search
 │   ├── tools/                  # Tool layer
 │   │   ├── schema.py           #   tool specs, risk levels, MCP conversion
 │   │   ├── registry.py         #   registration and dispatch
@@ -377,6 +426,21 @@ python -c "from faster_whisper import WhisperModel; model = WhisperModel('base')
 **Out of memory:**
 - Use a smaller model (`tiny` or `base`)
 - Set `WHISPER_COMPUTE_TYPE=int8`
+
+### Document Search Issues
+
+**"no documents are indexed yet":** run `jarvis-index ~/Documents`.
+
+**"could not embed":** `ollama pull nomic-embed-text`. Pointing
+`RAG_EMBED_MODEL` at a chat model instead of an embedding model is caught and
+reported rather than indexed as garbage.
+
+**"this index was built with X":** you changed `RAG_EMBED_MODEL`. Vectors from
+two models are not comparable, so this is refused rather than averaged over —
+re-index, or set it back.
+
+**Answers cite the wrong passages:** raise `RAG_MIN_SIMILARITY` (see above),
+or lower `RAG_CHUNK_SIZE` so each passage is about one thing.
 
 ### Wake Word Issues
 

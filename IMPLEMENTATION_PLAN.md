@@ -6,9 +6,10 @@ Architecture visée : [`ARCHITECTURE.md`](ARCHITECTURE.md).
 État actuel : [`AUDIT.md`](AUDIT.md).
 Campagne manuelle : [`TESTING.md`](TESTING.md).
 
-> **Phases 0 à 4 livrées**, plus les fournisseurs LLM ordonnés (3.5) et le
-> mot d'activation (5.1). 1062 tests passants, 0 `xfail`, 96 % de couverture.
-> Le reste de la Phase 5 est un choix de fonctionnalités, pas une dette.
+> **Phases 0 à 4 livrées**, plus les fournisseurs LLM ordonnés (3.5), le mot
+> d'activation (5.1) et la recherche documentaire (5.2). 1149 tests passants,
+> 0 `xfail`, 97 % de couverture. Le reste de la Phase 5 est un choix de
+> fonctionnalités, pas une dette.
 
 **Règle de sortie de chaque tâche** : le ou les tests `xfail(strict)`
 correspondants passent au vert. Un `xfail` strict qui réussit fait échouer
@@ -441,7 +442,7 @@ C'est le principal gain de l'orientation MCP : quatre fonctionnalités estimées
 | #3 Persistance des conversations | **Phase 3** | Prérequis du RAG, des analytics et du multi-utilisateur |
 | #16 Meilleure récupération sur erreur | Réparti sur 0→3 | Largement traité en chemin |
 | #1 Mot-clé d'activation | ✅ **livrée (5.1)** | openWakeWord, qui tourne en local et livre un modèle `hey_jarvis` pré-entraîné. Porcupine écarté comme prévu : une clé d'API Picovoice est exactement ce que « 100 % local » exclut. |
-| #2 RAG documentaire | Après MCP | Partage les embeddings avec la sélection d'outils (Phase 2.4), ce qui en réduit le coût. Alternative : un serveur MCP dédié, au prix d'un peu de latence. |
+| #2 RAG documentaire | ✅ **livrée (5.2)** | Le partage d'embeddings avec la sélection d'outils n'a jamais eu lieu : 2.4 a finalement été lexicale. Les embeddings viennent donc d'Ollama (`nomic-embed-text`), ce qui coûte zéro dépendance Python là où `sentence-transformers` aurait coûté torch. |
 | #11 Vision (LLaVA) | Plus tard | Ollama gère les modèles multimodaux ; le coût est surtout en RAM |
 | #9 Multi-utilisateur | Plus tard | Suppose un modèle de permissions par utilisateur — un projet en soi |
 | #13 API / WebSocket | Plus tard | Devient « Jarvis exposé *comme* serveur MCP », plus intéressant que REST, mais orthogonal au rôle de client |
@@ -486,6 +487,54 @@ sur une télévision allumée, la portée. Section 9 de [`TESTING.md`](TESTING.m
 
 ---
 
+## Phase 5.2 — Recherche documentaire ✅ livrée
+
+| Tâche | Détail |
+|---|---|
+| `rag/store.py` | SQLite + cosinus en force brute sur numpy. 20 000 × 768 float32 = 61 Mo et quelques millisecondes : chromadb n'achèterait rien et coûterait une dépendance, un démon et un second endroit où les données rancissent. |
+| `rag/embeddings.py` | Ollama, via le même `ProviderPool` que le chat — donc calculés sur le NAS quand le NAS est là, et repli identique |
+| `rag/indexer.py` | découpe sur les paragraphes, puis les phrases, puis les caractères ; incrémental par mtime et taille |
+| `jarvis-index` | troisième point d'entrée, avec `--status`, `--force` |
+| `tools/local/documents.py` | `docs__search`, enregistré **seulement** s'il y a un index à interroger |
+
+**Décisions payées par un test** :
+
+- **Embeddings par Ollama, pas `sentence-transformers`.** Le plan tablait sur
+  un partage avec la sélection d'outils ; celle-ci étant restée lexicale, il
+  n'y avait rien à partager. Ollama tourne déjà : zéro dépendance ajoutée, et
+  les embeddings suivent le fournisseur qui répond.
+- **La recherche est un outil que le modèle appelle**, pas du contexte injecté
+  à chaque tour : « quelle heure est-il » ne doit pas traîner vos notes dans
+  l'invite.
+- **Le modèle d'embedding est enregistré avec l'index.** Deux modèles donnent
+  des vecteurs incomparables et l'échec est *silencieux* : la recherche
+  continue de marcher et renvoie des absurdités assurées. Refusé, donc, pas
+  moyenné.
+- **Le contenu retrouvé est non fiable**, ce que `fs__read` n'est pas : là,
+  c'est l'utilisateur qui a nommé le fichier ; ici, c'est un score de
+  similarité qui l'a choisi. L'`origin` étant l'index et non chaque fichier,
+  chercher deux fois ne réescalade pas — c'est exactement ce pour quoi la
+  règle d'origine existe.
+- **Le bac à sable s'applique à l'indexation.** Indexer un fichier, c'est
+  mettre son contenu à une similarité de l'invite.
+
+**Trouvé en cherchant pourquoi une branche restait non couverte** : les k plus
+proches renvoient *toujours* quelque chose, donc la branche « rien ne
+correspond » était morte — et une question dont les notes ne parlent pas
+revenait avec les cinq passages les moins hors-sujet, que le modèle résumait
+ensuite avec aplomb. D'où `RAG_MIN_SIMILARITY`, désactivé par défaut parce que
+le bon seuil dépend du modèle, avec les similarités affichées pour le calibrer.
+
+**Trouvé par le smoke test** : `jarvis --text` sur une entrée épuisée
+(`echo … | jarvis --text`) finissait en « Fatal error » et code 1, et un EOF
+sur une demande de confirmation faisait échouer le tour au lieu de refuser.
+Corrigés tous les deux.
+
+**Non vérifiable ici** : la qualité de rappel sur de vrais documents avec un
+vrai modèle d'embedding. Section 9 de [`TESTING.md`](TESTING.md).
+
+---
+
 ## Charge totale
 
 | Phase | Charge |
@@ -498,6 +547,7 @@ sur une télévision allumée, la portée. Section 9 de [`TESTING.md`](TESTING.m
 | 4 — Qualité et packaging | 2 j |
 | **Jusqu'à l'objectif affiché** | **~16 j — livrée** |
 | 5.1 — Mot d'activation | 0,5 j |
+| 5.2 — Recherche documentaire | 1 j |
 
 Phase 5 selon les priorités, la majeure partie étant devenue de la
 configuration.

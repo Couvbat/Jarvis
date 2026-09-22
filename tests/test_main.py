@@ -1233,3 +1233,37 @@ class TestWakeWord:
         await instance.run_interactive()
 
         assert any("hey_jarvis" in status for status in recording.statuses)
+
+
+class TestEndOfInput:
+    """`echo "..." | jarvis --text` is a reasonable way to use this."""
+
+    async def test_text_mode_ends_cleanly_when_input_runs_out(
+        self, wiring, monkeypatch, capsys
+    ):
+        """It used to end in "Fatal error" and exit code 1 instead."""
+        def exhausted(prompt=""):
+            raise EOFError
+
+        monkeypatch.setattr(builtins, "input", exhausted)
+        await Jarvis(use_tui=False).run_text_mode()
+        assert "Goodbye" in capsys.readouterr().out
+
+    def test_a_confirmation_with_nobody_there_declines(
+        self, wiring, monkeypatch, capsys
+    ):
+        """Declining is the only safe reading of silence at a confirmation
+        prompt; raising would abort the turn instead of refusing the call."""
+        def exhausted(prompt=""):
+            raise EOFError
+
+        monkeypatch.setattr(builtins, "input", exhausted)
+        assert Jarvis(use_tui=False)._confirm(make_decision()) == (False, False)
+        assert "Cancelled" in capsys.readouterr().out
+
+    def test_a_confirmation_interrupted_declines_too(self, wiring, monkeypatch):
+        def interrupted(prompt=""):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(builtins, "input", interrupted)
+        assert Jarvis(use_tui=False)._confirm(make_decision()) == (False, False)

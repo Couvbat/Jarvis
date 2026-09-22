@@ -64,7 +64,8 @@ mécanisme reste la façon d'enregistrer un bug nouvellement trouvé.
 
 Qualité réelle de transcription, intelligibilité de la voix, latence mesurée,
 micro physique, vrai serveur Ollama (local ou distant), vrais serveurs MCP
-tiers, barge-in au casque. Tout cela suppose du matériel ou des poids de
+tiers, barge-in au casque, rappel de la recherche documentaire avec un vrai
+modèle d'embedding. Tout cela suppose du matériel ou des poids de
 modèles : voir [`../TESTING.md`](../TESTING.md).
 
 ## Conventions

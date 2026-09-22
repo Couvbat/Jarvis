@@ -10,7 +10,7 @@ from loguru import logger
 
 from jarvis.config import settings
 from jarvis.policy.paths import PathPolicy
-from jarvis.tools.local import apps, filesystem, web
+from jarvis.tools.local import apps, documents, filesystem, web
 from jarvis.tools.mcp.adapter import build_specs
 from jarvis.tools.mcp.manager import McpManager
 from jarvis.tools.mcp.servers import load_servers
@@ -32,12 +32,47 @@ def build_default_registry(path_policy: PathPolicy | None = None) -> ToolRegistr
         command_whitelist=settings.command_whitelist_list,
         gui_applications=settings.gui_applications_list,
     ))
+    registry.register_all(build_document_tools())
 
     logger.info(
         f"Registered {len(registry.names())} tools; "
         f"sandbox: {paths.describe_allowed()}"
     )
     return registry
+
+
+def build_document_tools() -> list:
+    """Document search, but only once there is an index to search.
+
+    Offering a tool that can only answer "nothing is indexed" spends a slot
+    in the toolbox and a paragraph of the prompt on nothing. The index is
+    built out of band by `jarvis-index`, so its absence is the normal state
+    for someone who has not asked for this.
+    """
+    from jarvis.rag.embeddings import Embedder
+    from jarvis.rag.store import DocumentStore
+
+    path = settings.documents_path
+    if not path.exists():
+        return []
+
+    try:
+        store = DocumentStore(path)
+        _, chunks = store.counts()
+    except Exception as e:
+        logger.warning(f"Could not open the document index at {path}: {e}")
+        return []
+
+    if not chunks:
+        return []
+
+    logger.info(f"Document search enabled: {chunks} indexed passage(s)")
+    return documents.build_tools(
+        store,
+        Embedder(),
+        default_limit=settings.rag_top_k,
+        min_similarity=settings.rag_min_similarity,
+    )
 
 
 def build_mcp_manager() -> McpManager:

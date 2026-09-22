@@ -185,7 +185,14 @@ class Jarvis:
 
         choices = "y/a/n" if may_remember else "y/n"
         while True:
-            choice = input(f"\nYour choice ({choices}): ").lower().strip()
+            try:
+                choice = input(f"\nYour choice ({choices}): ").lower().strip()
+            except (EOFError, KeyboardInterrupt):
+                # Nobody is there to answer. Declining is the only safe
+                # reading of silence at a confirmation prompt.
+                print("\nCancelled")
+                return (False, False)
+
             if choice == "y":
                 return (True, False)
             if choice == "a" and may_remember:
@@ -670,7 +677,10 @@ class Jarvis:
                     if await self.handle_language_switch(user_text):
                         continue
 
-                except KeyboardInterrupt:
+                except (KeyboardInterrupt, EOFError):
+                    # EOF as well as Ctrl-C: `echo "..." | jarvis --text` is a
+                    # reasonable way to use this, and it ended in a fatal
+                    # error and exit code 1 once the input ran out.
                     print("\n\nJarvis: Goodbye!")
                     break
 
