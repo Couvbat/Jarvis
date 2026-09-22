@@ -3,6 +3,8 @@
 import argparse
 import asyncio
 import sys
+import threading
+import time
 
 from loguru import logger
 
@@ -16,6 +18,7 @@ from jarvis.policy.taint import TaintState
 from jarvis.speech.barge_in import VAD_FRAME_MS, BargeInListener
 from jarvis.speech.chunker import SentenceChunker
 from jarvis.speech.pipeline import SpeechPipeline
+from jarvis.speech.wake import WakeWord, WakeWordUnavailable
 from jarvis.stt_module import STTModule
 from jarvis.text_utils import normalise
 from jarvis.tools.builtin import attach_mcp_tools, build_default_registry, build_mcp_manager
@@ -97,12 +100,61 @@ class Jarvis:
         self.speech = SpeechPipeline(self.tts, self.audio, on_fallback=self._show)
         #: Audio captured by an interruption, to start the next turn with.
         self._carried_audio = None
+        self.wake = self._build_wake_word()
+        #: Until this moment, a follow-up does not need the wake word again.
+        self._awake_until = 0.0
+        #: Waiting for the wake word can last all afternoon, in a thread that
+        #: Ctrl-C cannot reach. The interpreter joins that thread on the way
+        #: out, so without a way to tell it to stop, a woken-up session simply
+        #: never exits. aclose() sets this; the listener checks it.
+        self._shutdown = threading.Event()
 
         logger.info("Jarvis initialized and ready!")
 
         if self.use_tui:
             self.tui.update_status("Ready")
             self.tui.update_language(settings.whisper_language)
+
+    def _build_wake_word(self) -> WakeWord | None:
+        """The wake word detector, or None when Jarvis just listens.
+
+        A missing dependency or model is reported once and then ignored: an
+        assistant that refuses to start because it cannot do hands-free is
+        worse than one that listens the way it always has.
+        """
+        if not settings.wake_word:
+            return None
+
+        try:
+            detector = WakeWord(
+                model=settings.wake_word_model,
+                threshold=settings.wake_word_threshold,
+                sample_rate=settings.sample_rate,
+            )
+        except WakeWordUnavailable as e:
+            message = f"Wake word disabled: {e}"
+            logger.warning(message)
+            if self.use_tui:
+                self.tui.add_system_message(message)
+            return None
+
+        logger.info(f"Listening for the {detector.describe()}")
+        return detector
+
+    def _needs_wake_word(self) -> bool:
+        """Whether this turn has to be woken, or follows one that was."""
+        if self.wake is None:
+            return False
+        if self._carried_audio is not None:
+            # An interruption is already the user speaking; making them say
+            # the phrase to finish a sentence they started would be absurd.
+            return False
+        return time.monotonic() >= self._awake_until
+
+    def _stay_awake(self) -> None:
+        """Open the window in which a follow-up needs no wake word."""
+        if self.wake is not None:
+            self._awake_until = time.monotonic() + settings.wake_word_follow_up
 
     def _confirm(self, decision) -> tuple[bool, bool]:
         """Ask the user about one call.
@@ -182,6 +234,9 @@ class Jarvis:
 
     async def aclose(self):
         """Shut down the speech pipeline, the MCP servers and the log."""
+        # First, so a listener blocked on the microphone stops before the
+        # interpreter tries to join its thread.
+        self._shutdown.set()
         try:
             self.llm.close()
         except Exception as e:  # pragma: no cover - defensive
@@ -456,12 +511,30 @@ class Jarvis:
                 if not self.use_tui:
                     logger.info("\n--- Ready for your command ---")
 
-                if self.use_tui:
-                    self.tui.update_status("Listening...")
-
                 # Record audio
                 try:
                     carried, self._carried_audio = self._carried_audio, None
+
+                    if self._needs_wake_word():
+                        if self.use_tui:
+                            self.tui.update_status(
+                                f"Waiting for '{settings.wake_word_model}'..."
+                            )
+                        # What follows the phrase in the same breath becomes
+                        # the start of the recording, so a command does not
+                        # have to be said twice.
+                        carried = await asyncio.to_thread(
+                            self.audio.wait_for_wake,
+                            self.wake,
+                            tail=settings.wake_word_tail,
+                            should_stop=self._shutdown.is_set,
+                        )
+                        if self._shutdown.is_set():
+                            break
+
+                    if self.use_tui:
+                        self.tui.update_status("Listening...")
+
                     audio_data = await asyncio.to_thread(
                         self.audio.record_until_silence,
                         silence_threshold=1.5,
@@ -553,6 +626,11 @@ class Jarvis:
                 if self.use_tui:
                     self.tui.update_status("Speaking...")
                 await self._finish_speaking()
+
+                # The window starts once Jarvis has stopped talking, not when
+                # the answer was generated: it is there so a follow-up can be
+                # spoken, and it cannot be spoken over the answer.
+                self._stay_awake()
 
                 if self.use_tui:
                     self.tui.update_status("Ready")

@@ -6,9 +6,9 @@ Architecture visée : [`ARCHITECTURE.md`](ARCHITECTURE.md).
 État actuel : [`AUDIT.md`](AUDIT.md).
 Campagne manuelle : [`TESTING.md`](TESTING.md).
 
-> **Phases 0 à 4 livrées.** 1025 tests passants, 0 `xfail`, 96 % de
-> couverture. Il reste la Phase 5, qui est un choix de fonctionnalités, pas
-> une dette.
+> **Phases 0 à 4 livrées**, plus les fournisseurs LLM ordonnés (3.5) et le
+> mot d'activation (5.1). 1062 tests passants, 0 `xfail`, 96 % de couverture.
+> Le reste de la Phase 5 est un choix de fonctionnalités, pas une dette.
 
 **Règle de sortie de chaque tâche** : le ou les tests `xfail(strict)`
 correspondants passent au vert. Un `xfail` strict qui réussit fait échouer
@@ -440,11 +440,49 @@ C'est le principal gain de l'orientation MCP : quatre fonctionnalités estimées
 |---|---|---|
 | #3 Persistance des conversations | **Phase 3** | Prérequis du RAG, des analytics et du multi-utilisateur |
 | #16 Meilleure récupération sur erreur | Réparti sur 0→3 | Largement traité en chemin |
-| #1 Mot-clé d'activation | **Après Phase 3** | Exige un VAD fonctionnel (Phase 0.1) et une boucle audio continue (barge-in, Phase 3). Placé en premier dans `FEATURES_IDEA.md`, mais l'implémenter avant reviendrait à bâtir sur du sable. **Porcupine exige une clé d'API Picovoice** — incompatible avec l'objectif local ; évaluer `openWakeWord`. |
+| #1 Mot-clé d'activation | ✅ **livrée (5.1)** | openWakeWord, qui tourne en local et livre un modèle `hey_jarvis` pré-entraîné. Porcupine écarté comme prévu : une clé d'API Picovoice est exactement ce que « 100 % local » exclut. |
 | #2 RAG documentaire | Après MCP | Partage les embeddings avec la sélection d'outils (Phase 2.4), ce qui en réduit le coût. Alternative : un serveur MCP dédié, au prix d'un peu de latence. |
 | #11 Vision (LLaVA) | Plus tard | Ollama gère les modèles multimodaux ; le coût est surtout en RAM |
 | #9 Multi-utilisateur | Plus tard | Suppose un modèle de permissions par utilisateur — un projet en soi |
 | #13 API / WebSocket | Plus tard | Devient « Jarvis exposé *comme* serveur MCP », plus intéressant que REST, mais orthogonal au rôle de client |
+
+---
+
+## Phase 5.1 — Mot d'activation ✅ livrée
+
+Le premier élément de la Phase 5 dont les prérequis étaient tenus : un VAD qui
+marche (0.1) et une boucle audio continue (3.2).
+
+| Tâche | Détail |
+|---|---|
+| `speech/wake.py` | détecteur openWakeWord, trames de 1280 échantillons, import paresseux |
+| `AudioHandler.wait_for_wake` | écoute sans enregistrer, puis rend l'audio qui suit la phrase |
+| Fenêtre de relance | après une réponse, `WAKE_WORD_FOLLOW_UP` secondes sans avoir à répéter la phrase |
+| Dépendance optionnelle | extra `[wakeword]` : onnxruntime et tflite-runtime n'ont pas de roue partout, et taper ses commandes reste légitime |
+
+**Décisions payées par un test** :
+
+- **La commande dite dans la même respiration est conservée.** On dit « hey
+  Jarvis quelle heure est-il », pas « hey Jarvis », pause, « quelle heure
+  est-il ». L'audio qui suit la phrase est passé en `prefix` au même mécanisme
+  que le barge-in utilise pour les mots prononcés avant qu'il ne réagisse.
+- **Une relance n'exige pas la phrase.** La redire à chaque tour d'un échange
+  est ce que les gens cessent de faire.
+- **Une interruption n'exige jamais la phrase.** Le barge-in *est* déjà
+  l'utilisateur qui parle.
+- **Paquet ou modèles absents : Jarvis démarre quand même** et écoute comme
+  avant, en le disant une fois. Refuser de démarrer parce que le mains-libres
+  est indisponible serait pire que de ne pas l'avoir.
+
+**Trouvé en y réfléchissant, pas par les tests** : l'attente tourne dans un
+fil que Ctrl-C n'atteint pas, et l'interpréteur joint ce fil en sortant — une
+session réveillée ne se terminait donc jamais. Vérifié en envoyant un SIGINT à
+un Jarvis en attente : le processus devait être tué. Corrigé par un drapeau
+d'arrêt posé par `aclose()` et relu par l'écoute, avec un test de
+non-régression.
+
+**Non vérifiable ici** : la détection réelle dans une pièce, les faux positifs
+sur une télévision allumée, la portée. Section 9 de [`TESTING.md`](TESTING.md).
 
 ---
 
@@ -459,6 +497,7 @@ C'est le principal gain de l'orientation MCP : quatre fonctionnalités estimées
 | 3.5 — Fournisseurs LLM ordonnés (hors plan) | 0,5 j |
 | 4 — Qualité et packaging | 2 j |
 | **Jusqu'à l'objectif affiché** | **~16 j — livrée** |
+| 5.1 — Mot d'activation | 0,5 j |
 
 Phase 5 selon les priorités, la majeure partie étant devenue de la
 configuration.

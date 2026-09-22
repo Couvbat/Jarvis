@@ -20,6 +20,23 @@ class Settings(BaseSettings):
     # headphones, or a mic that cancels echo in hardware, turn this on.
     barge_in: bool = False
     barge_in_min_speech_ms: int = 200
+    # Hands-free activation. Off by default: it needs an optional dependency
+    # (`pip install "jarvis-assistant[wakeword]"`) and a model download, and
+    # without them Jarvis should still start and listen as it always has.
+    wake_word: bool = False
+    # A pretrained openWakeWord model name. "hey_jarvis" is one of them,
+    # which is convenient; "alexa", "hey_mycroft" and "hey_rhasspy" also
+    # exist, as does the path to a model you trained yourself.
+    wake_word_model: str = "hey_jarvis"
+    # Raise it if the room sets it off, lower it if it misses you.
+    wake_word_threshold: float = 0.5
+    # Seconds of audio kept after the phrase, so a command said in the same
+    # breath survives the handover to the recorder.
+    wake_word_tail: float = 0.5
+    # After an answer, listen this long without needing the phrase again.
+    # Saying it before every turn of an exchange is the thing people stop
+    # doing. 0 requires it every time.
+    wake_word_follow_up: float = 8.0
     sample_rate: int = 16000
     channels: int = 1
     # Which microphone to use: a name, an index, or empty for the system

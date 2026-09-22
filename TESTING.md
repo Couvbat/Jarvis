@@ -1,17 +1,21 @@
 # Campagne de tests manuels
 
-La suite automatisée couvre 1025 cas et 96 % des lignes, mais elle ne peut pas
+La suite automatisée couvre 1062 cas et 96 % des lignes, mais elle ne peut pas
 entendre. Tout ce qui suit demande du matériel, des poids de modèles ou un vrai
 serveur en face — c'est-à-dire précisément ce que le CI n'a pas.
 
 À passer **avant chaque version**, et après toute modification touchant
-l'audio, la sélection d'outils, la politique de confirmation ou les
-fournisseurs LLM.
+l'audio, le mot d'activation, la sélection d'outils, la politique de
+confirmation ou les fournisseurs LLM.
 
 ```bash
 pip install -e .
 jarvis-setup-piper --voice fr_FR-siwis-medium
 cp .env.example .env    # puis éditer
+
+# pour la section 9 seulement
+pip install "jarvis-assistant[wakeword]"
+python -c "import openwakeword.utils; openwakeword.utils.download_models()"
 ```
 
 Noter les résultats dans le tableau de la fin. Un « à revoir » n'est pas un
@@ -184,33 +188,55 @@ arrêter `ollama serve` à distance fait aussi l'affaire.
 
 ---
 
-## 9. Barge-in
+## 9. Mot d'activation
+
+Ce que la suite ne peut pas faire : prononcer « hey Jarvis » dans une pièce.
+Nécessite `pip install "jarvis-assistant[wakeword]"`, les modèles téléchargés,
+et `WAKE_WORD=true`.
+
+| # | Scénario | Attendu |
+|---|---|---|
+| 9.1 | « hey Jarvis » seul, puis attendre | Déclenche, puis enregistre |
+| 9.2 | « hey Jarvis quelle heure est-il » d'une traite | La commande est transcrite **en entier** — c'est le point de `WAKE_WORD_TAIL` |
+| 9.3 | Conversation normale dans la pièce, sans la phrase | Rien ne se déclenche pendant 10 min |
+| 9.4 | Télévision ou musique en fond | Compter les faux positifs ; ajuster `WAKE_WORD_THRESHOLD` |
+| 9.5 | Enchaîner une question dans les `WAKE_WORD_FOLLOW_UP` secondes | Pas besoin de répéter la phrase |
+| 9.6 | Attendre la fin de la fenêtre puis parler | La phrase est de nouveau exigée |
+| 9.7 | Depuis l'autre bout de la pièce | Noter la distance à laquelle ça cesse de marcher |
+| 9.8 | Paquet absent (`WAKE_WORD=true` sans l'extra) | Démarre quand même, un message le dit une fois |
+| 9.9 | Ctrl-C pendant l'attente | Sortie immédiate, pas de processus qui traîne |
+| 9.10 | Charge CPU pendant l'attente | Doit rester marginale ; sinon vérifier tflite-runtime |
+
+9.9 n'est pas théorique : l'attente tourne dans un fil que Ctrl-C n'atteint
+pas, et l'interpréteur joint ce fil en sortant.
+
+## 10. Barge-in
 
 **Désactivé par défaut** (`BARGE_IN=false`) : un micro ouvert dans la même
 pièce qu'un haut-parleur entend le haut-parleur, et Jarvis se coupe lui-même.
 
 | # | Scénario | Attendu |
 |---|---|---|
-| 9.1 | Au casque, `BARGE_IN=true`, parler pendant la réponse | Coupe net, ouvre un nouveau tour |
-| 9.2 | Au casque, tousser pendant la réponse | Ne coupe pas (parole non soutenue) |
-| 9.3 | Sur haut-parleurs ouverts, `BARGE_IN=true` | Vérifier s'il se coupe seul — si oui, laisser à `false` |
-| 9.4 | Couper puis reprendre | Les premiers mots prononcés pendant la coupure ne sont pas perdus |
+| 10.1 | Au casque, `BARGE_IN=true`, parler pendant la réponse | Coupe net, ouvre un nouveau tour |
+| 10.2 | Au casque, tousser pendant la réponse | Ne coupe pas (parole non soutenue) |
+| 10.3 | Sur haut-parleurs ouverts, `BARGE_IN=true` | Vérifier s'il se coupe seul — si oui, laisser à `false` |
+| 10.4 | Couper puis reprendre | Les premiers mots prononcés pendant la coupure ne sont pas perdus |
 
 ---
 
-## 10. Session longue
+## 11. Session longue
 
 Une heure d'usage réel, pas un script.
 
 | # | Point de contrôle | Attendu |
 |---|---|---|
-| 10.1 | Mémoire du processus après 50 tours | Stable, pas de croissance continue |
-| 10.2 | Fichiers temporaires (`/tmp`) | Rien ne s'accumule |
-| 10.3 | `jarvis.log` | Lisible, pas de secret, pas de contenu de fichier entier |
-| 10.4 | Historique après 20 tours | Le contexte ancien tombe sans casser un résultat d'outil |
-| 10.5 | `jarvis --resume` à la session suivante | La mémoire de la veille est là |
-| 10.6 | Ctrl-C en plein tour | Sortie propre, base de données non corrompue |
-| 10.7 | Changer de langue en cours de session, dans les deux sens | STT et réponses suivent |
+| 11.1 | Mémoire du processus après 50 tours | Stable, pas de croissance continue |
+| 11.2 | Fichiers temporaires (`/tmp`) | Rien ne s'accumule |
+| 11.3 | `jarvis.log` | Lisible, pas de secret, pas de contenu de fichier entier |
+| 11.4 | Historique après 20 tours | Le contexte ancien tombe sans casser un résultat d'outil |
+| 11.5 | `jarvis --resume` à la session suivante | La mémoire de la veille est là |
+| 11.6 | Ctrl-C en plein tour | Sortie propre, base de données non corrompue |
+| 11.7 | Changer de langue en cours de session, dans les deux sens | STT et réponses suivent |
 
 ---
 
@@ -229,8 +255,9 @@ Une heure d'usage réel, pas un script.
 | 6. Politique | | | |
 | 7. MCP | | | |
 | 8. Fournisseurs | | | |
-| 9. Barge-in | | | |
-| 10. Session longue | | | |
+| 9. Mot d'activation | | | |
+| 10. Barge-in | | | |
+| 11. Session longue | | | |
 
 Tout « à revoir » qui se reproduit devient une entrée dans
 [`AUDIT.md`](AUDIT.md) avec un test `xfail(strict=True)` — c'est le mécanisme

@@ -437,6 +437,71 @@ class _OllamaModule(types.ModuleType):
 
 
 # --------------------------------------------------------------------------- #
+# openwakeword
+# --------------------------------------------------------------------------- #
+
+class FakeWakeModel:
+    """Mirrors ``openwakeword.model.Model``, including what it refuses.
+
+    The real model rejects anything that is not an ndarray, and answers with a
+    score per loaded model rather than a bare float.  It also accumulates
+    audio internally, which is why Jarvis carves exact 1280-sample frames: the
+    sizes it was fed are recorded here so a test can hold that to account.
+    """
+
+    #: scores handed out in order; the last one repeats once exhausted
+    scripted_scores: list[float] = []
+    #: every model instance built, for assertions on constructor kwargs
+    instances: list["FakeWakeModel"] = []
+
+    def __init__(self, wakeword_models: list | None = None, **kwargs: Any):
+        if not wakeword_models:
+            raise ValueError("no wakeword models specified")
+        self.wakeword_models = list(wakeword_models)
+        self.kwargs = kwargs
+        self.scores = list(FakeWakeModel.scripted_scores)
+        self.frame_sizes: list[int] = []
+        self.resets = 0
+        FakeWakeModel.instances.append(self)
+
+    def predict(self, x: Any, **kwargs: Any) -> dict:
+        if not isinstance(x, np.ndarray):
+            raise ValueError(
+                "The input audio data (x) must by a Numpy array, instead "
+                f"received an object of type {type(x)}."
+            )
+        self.frame_sizes.append(len(x))
+        score = self.scores.pop(0) if self.scores else 0.0
+        return {self.wakeword_models[0]: score}
+
+    def reset(self) -> None:
+        self.resets += 1
+
+
+class _OpenWakeWordModule(types.ModuleType):
+    def __init__(self) -> None:
+        super().__init__("openwakeword")
+        self.Model = FakeWakeModel
+        #: raised by Model(...) when set, standing in for missing model files
+        self.load_error: Exception | None = None
+
+        model_module = types.ModuleType("openwakeword.model")
+        model_module.Model = self._build
+        sys.modules["openwakeword.model"] = model_module
+        self.model = model_module
+
+    def _build(self, *args: Any, **kwargs: Any) -> FakeWakeModel:
+        if self.load_error is not None:
+            raise self.load_error
+        return FakeWakeModel(*args, **kwargs)
+
+    def reset(self) -> None:
+        self.load_error = None
+        FakeWakeModel.scripted_scores = []
+        FakeWakeModel.instances = []
+
+
+# --------------------------------------------------------------------------- #
 # installation
 # --------------------------------------------------------------------------- #
 
@@ -447,6 +512,7 @@ def install() -> dict:
         "webrtcvad": _WebrtcVadModule(),
         "faster_whisper": _FasterWhisperModule(),
         "ollama": _OllamaModule(),
+        "openwakeword": _OpenWakeWordModule(),
     }
     for name, module in modules.items():
         sys.modules[name] = module

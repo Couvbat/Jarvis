@@ -19,9 +19,18 @@ class FakeAudio:
 
     def __init__(self):
         self.played = []
+        self.recordings = []      # kwargs each recording was asked for
+        self.wake_waits = []      # kwargs each wake wait was asked for
+        #: audio wait_for_wake reports as spoken after the phrase
+        self.wake_tail = np.zeros(0, dtype=np.int16)
 
     def record_until_silence(self, **kwargs):
+        self.recordings.append(kwargs)
         return np.zeros(16000, dtype=np.int16)
+
+    def wait_for_wake(self, detector, **kwargs):
+        self.wake_waits.append(kwargs)
+        return self.wake_tail
 
     def play_audio(self, audio, sample_rate=None):
         self.played.append((audio, sample_rate))
@@ -1060,3 +1069,167 @@ async def test_playback_uses_the_synthesiser_sample_rate(wiring):
     assert wiring["audio"].played
     assert all(rate == wiring["tts"].sample_rate
                for _, rate in wiring["audio"].played)
+
+
+class TestWakeWord:
+    """Hands-free activation, as the loop actually uses it."""
+
+    def enable(self, settings, monkeypatch, detector=None):
+        """Turn the wake word on without needing openWakeWord installed."""
+        settings.wake_word = True
+        if detector is not None:
+            monkeypatch.setattr(
+                main_module, "WakeWord", lambda **kwargs: detector
+            )
+        return settings
+
+    class Detector:
+        def describe(self):
+            return "wake word 'hey_jarvis'"
+
+    def test_it_is_off_unless_asked_for(self, wiring):
+        """It needs an optional dependency and a model download; defaulting it
+        on would break every existing install."""
+        assert Jarvis(use_tui=False).wake is None
+
+    def test_an_unavailable_detector_costs_the_feature_not_the_session(
+        self, wiring, settings, monkeypatch
+    ):
+        """Refusing to start because hands-free is unavailable would be worse
+        than listening the way Jarvis always has."""
+        def unavailable(**kwargs):
+            raise main_module.WakeWordUnavailable("openWakeWord is not installed")
+
+        settings.wake_word = True
+        monkeypatch.setattr(main_module, "WakeWord", unavailable)
+
+        instance = Jarvis(use_tui=False)
+        assert instance.wake is None
+
+    def test_the_reason_is_shown_in_the_tui(self, wiring, settings, monkeypatch):
+        def unavailable(**kwargs):
+            raise main_module.WakeWordUnavailable("models are not downloaded")
+
+        settings.wake_word = True
+        monkeypatch.setattr(main_module, "WakeWord", unavailable)
+        recording = RecordingTUI()
+        monkeypatch.setattr(main_module, "JarvisTUI", lambda: recording)
+
+        Jarvis(use_tui=True)
+        messages = [
+            str(payload) for name, payload in recording.events
+            if name == "add_system_message"
+        ]
+        assert any("not downloaded" in text for text in messages)
+
+    async def test_recording_waits_for_the_phrase(
+        self, wiring, settings, monkeypatch
+    ):
+        self.enable(settings, monkeypatch, self.Detector())
+        wiring["stt"].script = ["exit"]
+
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        await instance.run_interactive()
+
+        assert wiring["audio"].wake_waits, "recorded without waiting to be woken"
+
+    async def test_the_command_said_in_the_same_breath_is_kept(
+        self, wiring, settings, monkeypatch
+    ):
+        """"hey Jarvis quelle heure est-il" is one utterance. What follows the
+        phrase has to reach the recorder, or the user says it twice."""
+        self.enable(settings, monkeypatch, self.Detector())
+        wiring["audio"].wake_tail = np.ones(800, dtype=np.int16)
+        wiring["stt"].script = ["exit"]
+
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        await instance.run_interactive()
+
+        prefix = wiring["audio"].recordings[0]["prefix"]
+        assert prefix is not None and len(prefix) == 800
+
+    async def test_a_follow_up_does_not_need_the_phrase_again(
+        self, wiring, settings, monkeypatch
+    ):
+        """Saying it before every turn of an exchange is the thing people stop
+        doing."""
+        self.enable(settings, monkeypatch, self.Detector())
+        settings.wake_word_follow_up = 60.0
+        wiring["stt"].script = ["bonjour", "et après", "exit"]
+
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        await instance.run_interactive()
+
+        assert len(wiring["audio"].recordings) == 3
+        assert len(wiring["audio"].wake_waits) == 1
+
+    async def test_the_window_closes(self, wiring, settings, monkeypatch):
+        """Otherwise the first wake word of the session is the last, and the
+        room is live from then on."""
+        self.enable(settings, monkeypatch, self.Detector())
+        settings.wake_word_follow_up = 0.0
+        wiring["stt"].script = ["bonjour", "exit"]
+
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        await instance.run_interactive()
+
+        assert len(wiring["audio"].wake_waits) == 2
+
+    def test_an_interruption_never_needs_the_phrase(
+        self, wiring, settings, monkeypatch
+    ):
+        """Barge-in is already the user talking. Asking them to say the wake
+        word to finish their own sentence would be absurd."""
+        self.enable(settings, monkeypatch, self.Detector())
+        settings.wake_word_follow_up = 0.0
+
+        instance = Jarvis(use_tui=False)
+        assert instance._needs_wake_word() is True
+        instance._carried_audio = np.ones(100, dtype=np.int16)
+        assert instance._needs_wake_word() is False
+
+    def test_no_detector_means_no_waiting(self, wiring):
+        assert Jarvis(use_tui=False)._needs_wake_word() is False
+
+    async def test_the_listener_is_given_a_way_to_stop(
+        self, wiring, settings, monkeypatch
+    ):
+        """Waiting for the wake word happens in a thread that Ctrl-C cannot
+        reach, and the interpreter joins that thread on the way out. Without
+        this the session simply never exits - found by sending SIGINT to a
+        waiting Jarvis, not by any unit test."""
+        self.enable(settings, monkeypatch, self.Detector())
+        wiring["stt"].script = ["exit"]
+
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        await instance.run_interactive()
+
+        should_stop = wiring["audio"].wake_waits[0]["should_stop"]
+        assert should_stop() is True, "shutdown did not reach the listener"
+
+    async def test_shutting_down_stops_a_waiting_listener(self, wiring, settings):
+        instance = Jarvis(use_tui=False)
+        assert instance._shutdown.is_set() is False
+        await instance.aclose()
+        assert instance._shutdown.is_set() is True
+
+    async def test_the_tui_says_what_it_is_waiting_for(
+        self, wiring, settings, monkeypatch
+    ):
+        """"Listening..." while ignoring you is the worst of both."""
+        self.enable(settings, monkeypatch, self.Detector())
+        recording = RecordingTUI()
+        monkeypatch.setattr(main_module, "JarvisTUI", lambda: recording)
+        wiring["stt"].script = ["exit"]
+
+        instance = Jarvis(use_tui=True)
+        instance._tui = recording
+        instance._confirm = lambda decision: (True, False)
+        await instance.run_interactive()
+
+        assert any("hey_jarvis" in status for status in recording.statuses)

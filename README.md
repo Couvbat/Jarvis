@@ -8,6 +8,7 @@ A privacy-focused, local-first voice assistant for Linux that runs entirely on y
 - 🎤 **Speech-to-Text**: Uses OpenAI Whisper (via faster-whisper) for accurate voice recognition
 - 🔊 **Text-to-Speech**: Uses Piper TTS for natural voice synthesis
 - 🎯 **Voice Activity Detection**: Intelligent listening with automatic silence detection
+- 👋 **Wake word** (optional): hands-free activation on "hey Jarvis", locally, with no API key
 - 🛠️ **System Operations**: 
   - File management (create, read, delete files and directories)
   - Web page fetching and information retrieval
@@ -217,6 +218,46 @@ Edit [.env](.env) to customize:
   thousand tokens whatever the model's native size, and the tool schemas are
   re-sent every turn.
 
+### Hands-free activation
+
+Without a wake word Jarvis records, transcribes and answers everything it
+hears. That is fine for a session you started deliberately and wrong for
+something that sits on a desk all day.
+
+```bash
+pip install "jarvis-assistant[wakeword]"
+python -c "import openwakeword.utils; openwakeword.utils.download_models()"
+```
+
+Then in `.env`:
+
+```bash
+WAKE_WORD=true
+WAKE_WORD_MODEL=hey_jarvis     # also: alexa, hey_mycroft, hey_rhasspy
+WAKE_WORD_THRESHOLD=0.5        # up if the room sets it off, down if it misses you
+WAKE_WORD_FOLLOW_UP=8          # seconds a follow-up needs no wake word
+```
+
+The detector is [openWakeWord](https://github.com/dscripka/openWakeWord),
+which runs locally and happens to ship a pretrained `hey_jarvis` model.
+Porcupine, the usual suggestion, needs a Picovoice API key — a key check
+against a remote service is exactly what "fully local" rules out, however
+good the detector is.
+
+Two things it does that a naive version does not:
+
+- **The command in the same breath survives.** People say "hey Jarvis quelle
+  heure est-il", not "hey Jarvis", pause, "quelle heure est-il". The audio
+  after the phrase is carried into the recording (`WAKE_WORD_TAIL`).
+- **A follow-up does not need the phrase again.** For `WAKE_WORD_FOLLOW_UP`
+  seconds after an answer, Jarvis just listens. Saying the wake word before
+  every turn is the thing people stop doing. Set it to `0` to require it
+  every time.
+
+If the package or the models are missing, Jarvis says so once and listens the
+way it always has, rather than refusing to start. Needs `SAMPLE_RATE=16000`,
+which is the default — the models mean nothing at any other rate.
+
 ### Remote and fallback providers
 
 A self-hosted Ollama on the LAN and a small model on this machine are not the
@@ -282,7 +323,7 @@ Jarvis/
 │   ├── text_utils.py           #   shared normalisation and tokenisation
 │   ├── conversation_store.py   #   conversation history (SQLite)
 │   ├── setup_piper.py          #   Piper installer (`jarvis-setup-piper`)
-│   ├── speech/                 #   sentence chunking, TTS queue, barge-in
+│   ├── speech/                 #   sentence chunking, TTS queue, barge-in, wake word
 │   ├── tools/                  # Tool layer
 │   │   ├── schema.py           #   tool specs, risk levels, MCP conversion
 │   │   ├── registry.py         #   registration and dispatch
@@ -336,6 +377,20 @@ python -c "from faster_whisper import WhisperModel; model = WhisperModel('base')
 **Out of memory:**
 - Use a smaller model (`tiny` or `base`)
 - Set `WHISPER_COMPUTE_TYPE=int8`
+
+### Wake Word Issues
+
+**It never hears me:** lower `WAKE_WORD_THRESHOLD`, and check the microphone
+is the one you think it is (`AUDIO_INPUT_DEVICE`). `hey_jarvis` is trained on
+English pronunciation; a strong accent may need a lower threshold or a model
+you train yourself.
+
+**It goes off on its own:** raise the threshold. Check the follow-up window
+too — inside it Jarvis is listening on purpose.
+
+**"Wake word disabled" at startup:** the message says which of the two steps
+is missing, installing the package or downloading the models. Jarvis carries
+on listening without it.
 
 ### Ollama Issues
 

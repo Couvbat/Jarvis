@@ -61,6 +61,7 @@ src/jarvis/
 ├── config.py             configuration (pydantic-settings)
 ├── audio/
 │   ├── capture.py        enregistrement, VAD, détection de fin de parole
+│   ├── wake.py           mot d'activation (openWakeWord), optionnel
 │   ├── playback.py       lecture interruptible (barge-in)
 │   └── devices.py        sélection et diagnostic des périphériques
 ├── stt/whisper.py        faster-whisper, transcription incrémentale
