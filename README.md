@@ -17,6 +17,7 @@ A privacy-focused, local-first voice assistant for Linux that runs entirely on y
 - 💬 **Conversation Memory**: Maintains context across multiple interactions
 - 📚 **Document search** (optional): ask questions about your own notes and files, indexed locally
 - ⏰ **Reminders**: "remind me to call the plumber tomorrow at nine", kept across restarts
+- 👁️ **Vision** (optional): ask what is in a screenshot or a photo on your disk
 
 ## Architecture
 
@@ -220,6 +221,33 @@ Edit [.env](.env) to customize:
   thousand tokens whatever the model's native size, and the tool schemas are
   re-sent every turn.
 
+### Looking at images
+
+```bash
+ollama pull llava
+# .env
+VISION=true
+```
+
+*"What's in ~/Downloads/screenshot.png?"* — the image is read from disk and
+put to a multimodal model, and the answer comes back as a tool result.
+
+It is a **separate model from the one answering your questions**. Making
+vision conditional on swapping the chat model would mean choosing between
+"can see" and "can think": a text-only 70B on the NAS stays where it is, and
+the picture goes to `llava` wherever that is pulled.
+
+The same path sandbox applies — a photo is a file like any other, and
+`~/.ssh` is no more readable for being asked about in pictures. Descriptions
+count as **untrusted content**, because a screenshot of a web page is a web
+page: text in an image can say "ignore your previous instructions", and
+visual prompt injection is not hypothetical.
+
+Screenshot *capture* is not included: it needs a display-server-specific
+binary (`grim`, `spectacle`, `scrot`…) and it is a different privacy
+question from reading a file you named. Take the screenshot yourself and ask
+about the file.
+
 ### Reminders
 
 *"Remind me to call the plumber tomorrow at nine."* *"What have I got
@@ -400,6 +428,7 @@ Jarvis/
 │   ├── text_utils.py           #   shared normalisation and tokenisation
 │   ├── conversation_store.py   #   conversation history (SQLite)
 │   ├── reminders.py            #   scheduled reminders (SQLite)
+│   ├── vision.py               #   multimodal model for images
 │   ├── setup_piper.py          #   Piper installer (`jarvis-setup-piper`)
 │   ├── speech/                 #   sentence chunking, TTS queue, barge-in, wake word
 │   ├── rag/                    #   document index: chunking, embeddings, search

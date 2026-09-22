@@ -75,6 +75,7 @@ src/jarvis/
 │   └── agent.py          la boucle de tool calling
 ├── rag/                  recherche documentaire (index SQLite + embeddings)
 ├── reminders.py          rappels planifiés (SQLite)
+├── vision.py             modèle multimodal pour les images (optionnel)
 ├── tools/
 │   ├── registry.py       registre unifié, namespacing, dispatch
 │   ├── selection.py      sélection top-k (cf. §4)

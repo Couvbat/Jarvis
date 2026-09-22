@@ -120,34 +120,41 @@ class TestHardBreaks:
 class FakeTts:
     sample_rate = 22050
 
-    def __init__(self, delay=0.0, fails_on=()):
+    def __init__(self, delay=0.0, fails_on=(), events=None):
         self.delay = delay
         self.fails_on = set(fails_on)
         self.synthesised = []
+        #: shared with FakeAudio, so the two timelines interleave in one list
+        self.events = events if events is not None else []
 
     def synthesize(self, text):
         import time
 
         if text in self.fails_on:
             raise RuntimeError("piper missing")
+        self.events.append(("synth-start", text))
         if self.delay:
             time.sleep(self.delay)
         self.synthesised.append(text)
+        self.events.append(("synth-end", text))
         return np.zeros(100, dtype=np.int16), self.sample_rate
 
 
 class FakeAudio:
-    def __init__(self, delay=0.0):
+    def __init__(self, delay=0.0, events=None):
         self.delay = delay
         self.played = []
         self.stopped = 0
+        self.events = events if events is not None else []
 
     def play_audio(self, audio, sample_rate=None):
         import time
 
+        self.events.append(("play-start", len(self.played)))
         if self.delay:
             time.sleep(self.delay)
         self.played.append(sample_rate)
+        self.events.append(("play-end", len(self.played) - 1))
 
     def stop_playback(self):
         self.stopped += 1
@@ -182,18 +189,42 @@ class TestPipeline:
             await pipeline.drain()
 
     async def test_synthesis_overlaps_playback(self):
-        """One loop would leave an audible gap at every sentence boundary."""
-        tts, audio = FakeTts(delay=0.04), FakeAudio(delay=0.04)
+        """One loop would leave an audible gap at every sentence boundary.
+
+        Asserted on the order of events rather than on the clock: a wall-time
+        threshold with a 20 ms margin is a test that fails on a busy machine
+        for reasons that have nothing to do with the code.
+        """
+        timeline = []
+        tts = FakeTts(delay=0.04, events=timeline)
+        audio = FakeAudio(delay=0.04, events=timeline)
+
         async with SpeechPipeline(tts, audio) as pipeline:
-            loop = asyncio.get_running_loop()
-            started = loop.time()
             for word in ("un", "deux", "trois"):
                 pipeline.say(word)
             await pipeline.drain()
-            elapsed = loop.time() - started
 
-        # Strictly sequential would be 3 x (0.04 + 0.04) = 0.24s.
-        assert elapsed < 0.22
+        # The second sentence must start being synthesised before the first
+        # has finished playing - that overlap is the whole design.
+        synth_second = timeline.index(("synth-start", "deux"))
+        play_first_end = timeline.index(("play-end", 0))
+        assert synth_second < play_first_end, timeline
+
+    async def test_every_sentence_is_played_in_order(self):
+        """Overlapping must not reorder them."""
+        timeline = []
+        tts = FakeTts(delay=0.02, events=timeline)
+        audio = FakeAudio(delay=0.02, events=timeline)
+
+        async with SpeechPipeline(tts, audio) as pipeline:
+            for word in ("un", "deux", "trois"):
+                pipeline.say(word)
+            await pipeline.drain()
+
+        assert tts.synthesised == ["un", "deux", "trois"]
+        assert [e for e in timeline if e[0] == "play-start"] == [
+            ("play-start", 0), ("play-start", 1), ("play-start", 2)
+        ]
 
     async def test_the_sample_rate_comes_from_the_synthesiser(self):
         tts, audio = FakeTts(), FakeAudio()

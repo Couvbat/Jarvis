@@ -7,9 +7,8 @@ Architecture visée : [`ARCHITECTURE.md`](ARCHITECTURE.md).
 Campagne manuelle : [`TESTING.md`](TESTING.md).
 
 > **Phases 0 à 4 livrées**, plus les fournisseurs LLM ordonnés (3.5), le mot
-> d'activation (5.1), la recherche documentaire (5.2) et les rappels (5.3).
-> 1209 tests passants, 0 `xfail`, 97 % de couverture. Le reste de la Phase 5
-> est un choix de fonctionnalités, pas une dette.
+> d'activation (5.1), la recherche documentaire (5.2), les rappels (5.3) et
+> la vision (5.4). 1241 tests passants, 0 `xfail`, 97 % de couverture.
 
 **Règle de sortie de chaque tâche** : le ou les tests `xfail(strict)`
 correspondants passent au vert. Un `xfail` strict qui réussit fait échouer
@@ -444,7 +443,7 @@ C'est le principal gain de l'orientation MCP : quatre fonctionnalités estimées
 | #16 Meilleure récupération sur erreur | Réparti sur 0→3 | Largement traité en chemin |
 | #1 Mot-clé d'activation | ✅ **livrée (5.1)** | openWakeWord, qui tourne en local et livre un modèle `hey_jarvis` pré-entraîné. Porcupine écarté comme prévu : une clé d'API Picovoice est exactement ce que « 100 % local » exclut. |
 | #2 RAG documentaire | ✅ **livrée (5.2)** | Le partage d'embeddings avec la sélection d'outils n'a jamais eu lieu : 2.4 a finalement été lexicale. Les embeddings viennent donc d'Ollama (`nomic-embed-text`), ce qui coûte zéro dépendance Python là où `sentence-transformers` aurait coûté torch. |
-| #11 Vision (LLaVA) | Plus tard | Ollama gère les modèles multimodaux ; le coût est surtout en RAM |
+| #11 Vision (LLaVA) | ✅ **livrée (5.4)** | Un modèle *séparé* du modèle de chat : le conditionner au multimodal reviendrait à choisir entre « voit » et « réfléchit ». La capture d'écran reste dehors — binaire propre au serveur d'affichage, et une question de vie privée différente. |
 | #9 Multi-utilisateur | Plus tard | Suppose un modèle de permissions par utilisateur — un projet en soi |
 | #13 API / WebSocket | Plus tard | Devient « Jarvis exposé *comme* serveur MCP », plus intéressant que REST, mais orthogonal au rôle de client |
 
@@ -583,6 +582,41 @@ fonctionnalité.
 
 ---
 
+## Phase 5.4 — Vision ✅ livrée
+
+| Tâche | Détail |
+|---|---|
+| `vision.py` | modèle multimodal via le même `ProviderPool`, donc même repli |
+| `tools/local/images.py` | `vision__describe`, bac à sable des chemins, `precheck` |
+
+**Décisions payées par un test** :
+
+- **Un modèle séparé, pas le modèle de chat.** Le modèle qui répond peut être
+  un 70B texte sur le NAS ; rendre la vision conditionnelle à son échange
+  reviendrait à choisir entre « voit » et « réfléchit ».
+- **Une description est du contenu non fiable.** Une capture d'écran d'une
+  page web *est* une page web : le texte dans une image peut dire « ignore
+  tes instructions », et l'injection par l'image n'est pas théorique. Même
+  origine pour toutes les images, donc regarder la seconde ne réescalade pas.
+- **Le format est refusé avant lecture.** Envoyer un méga-octet de ZIP à un
+  modèle qui ne peut pas s'en servir coûte le temps et produit des absurdités
+  assurées.
+- **Le bac à sable s'applique.** Une photo est un fichier comme un autre, et
+  `~/.ssh` n'est pas plus lisible parce qu'on le demande en images.
+
+**Hors périmètre, et pourquoi** : la *capture* d'écran demande un binaire
+propre au serveur d'affichage (`grim`, `spectacle`, `scrot`…) et pose une
+question de vie privée différente de celle de lire un fichier qu'on a nommé.
+Prendre la capture soi-même et demander le fichier.
+
+**Corrigé au passage** : `test_synthesis_overlaps_playback` mesurait un temps
+mural avec 20 ms de marge — il a lâché sous charge pendant cette phase. Il
+vérifie désormais l'ordre des événements (la synthèse de la phrase suivante
+commence avant la fin de la lecture de la précédente), ce qui est la vraie
+propriété et ne dépend plus de la machine.
+
+---
+
 ## Charge totale
 
 | Phase | Charge |
@@ -597,6 +631,7 @@ fonctionnalité.
 | 5.1 — Mot d'activation | 0,5 j |
 | 5.2 — Recherche documentaire | 1 j |
 | 5.3 — Rappels | 0,5 j |
+| 5.4 — Vision | 0,5 j |
 
 Phase 5 selon les priorités, la majeure partie étant devenue de la
 configuration.

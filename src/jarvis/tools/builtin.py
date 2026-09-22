@@ -10,7 +10,14 @@ from loguru import logger
 
 from jarvis.config import settings
 from jarvis.policy.paths import PathPolicy
-from jarvis.tools.local import apps, documents, filesystem, schedule, web
+from jarvis.tools.local import (
+    apps,
+    documents,
+    filesystem,
+    images,
+    schedule,
+    web,
+)
 from jarvis.tools.mcp.adapter import build_specs
 from jarvis.tools.mcp.manager import McpManager
 from jarvis.tools.mcp.servers import load_servers
@@ -34,6 +41,7 @@ def build_default_registry(path_policy: PathPolicy | None = None) -> ToolRegistr
     ))
     registry.register_all(build_document_tools())
     registry.register_all(build_reminder_tools())
+    registry.register_all(build_vision_tools(paths))
 
     logger.info(
         f"Registered {len(registry.names())} tools; "
@@ -90,6 +98,21 @@ def build_reminder_tools() -> list:
         return []
 
     return schedule.build_tools(store)
+
+
+def build_vision_tools(paths: PathPolicy) -> list:
+    """Vision, if it has been turned on.
+
+    Offering a tool whose only possible answer is "that model is not pulled"
+    costs a slot in the toolbox and a paragraph of the prompt.
+    """
+    if not settings.vision:
+        return []
+
+    from jarvis.vision import VisionModel
+
+    logger.info(f"Vision enabled with '{settings.vision_model}'")
+    return images.build_tools(paths, VisionModel())
 
 
 def build_mcp_manager() -> McpManager:

@@ -1,6 +1,6 @@
 # Campagne de tests manuels
 
-La suite automatisée couvre 1209 cas et 96 % des lignes, mais elle ne peut pas
+La suite automatisée couvre 1241 cas et 96 % des lignes, mais elle ne peut pas
 entendre. Tout ce qui suit demande du matériel, des poids de modèles ou un vrai
 serveur en face — c'est-à-dire précisément ce que le CI n'a pas.
 
@@ -13,11 +13,14 @@ pip install -e .
 jarvis-setup-piper --voice fr_FR-siwis-medium
 cp .env.example .env    # puis éditer
 
-# pour la section 10 seulement
+# pour la section 9 seulement
+ollama pull llava
+
+# pour la section 11 seulement
 ollama pull nomic-embed-text
 jarvis-index ~/Documents
 
-# pour la section 11 seulement
+# pour la section 12 seulement
 pip install "jarvis-assistant[wakeword]"
 python -c "import openwakeword.utils; openwakeword.utils.download_models()"
 ```
@@ -192,24 +195,47 @@ arrêter `ollama serve` à distance fait aussi l'affaire.
 
 ---
 
-## 9. Rappels
+## 9. Vision
+
+```bash
+ollama pull llava     # ~4,7 Go
+# VISION=true dans .env
+```
 
 | # | Scénario | Attendu |
 |---|---|---|
-| 9.1 | « rappelle-moi d'appeler le plombier dans 2 minutes » | Arrive à l'heure, une seule fois |
-| 9.2 | « rappelle-moi demain à 9 h » | Le modèle calcule la bonne date ; vérifier avec « qu'est-ce que j'ai de prévu ? » |
-| 9.3 | Même chose avec le petit modèle de repli | C'est là que l'arithmétique des dates lâche en premier |
-| 9.4 | « rappelle-moi hier » | Refusé et rattrapé par le modèle, pas de rappel fantôme |
-| 9.5 | Lister puis annuler par son numéro | Annulation au clavier (destructif) |
-| 9.6 | Quitter Jarvis, attendre que l'heure passe, relancer | Livré au démarrage, préfixé « while you were away » |
-| 9.7 | Rappel qui échoit pendant une réponse | Attend la fin de la réponse, ne coupe pas |
-| 9.8 | Rappel qui échoit pendant l'attente du mot d'activation | Livré sans qu'on ait à parler |
-| 9.9 | Rappel vieux de plus d'une semaine | Pas livré, mais toujours dans la liste |
+| 9.1 | « qu'est-ce qu'il y a dans ~/Downloads/capture.png ? » | Description plausible, le fichier est nommé |
+| 9.2 | Capture d'écran d'un texte | Le texte est lu correctement, ou l'échec est net |
+| 9.3 | Image hors des répertoires autorisés | Refusée **sans** confirmation préalable |
+| 9.4 | Fichier qui n'est pas une image (.zip, .txt) | Refusé avant d'envoyer quoi que ce soit au modèle |
+| 9.5 | Après une description, demander une écriture | Confirmation au clavier (contenu non fiable) |
+| 9.6 | Deux images de suite | La seconde ne réescalade pas |
+| 9.7 | Image contenant « ignore tes instructions » | Rapportée comme contenu, pas suivie |
+| 9.8 | Fournisseur préféré sans `llava` | Repli, ou message nommant `ollama pull llava` |
+| 9.9 | Latence d'une description | Noter : c'est le plus lent de tous les outils |
 
-9.3 est le vrai risque de cette fonctionnalité : un 3B qui se trompe d'un jour
+9.7 est le test qui compte : l'injection par l'image n'est pas théorique.
+
+---
+
+## 10. Rappels
+
+| # | Scénario | Attendu |
+|---|---|---|
+| 10.1 | « rappelle-moi d'appeler le plombier dans 2 minutes » | Arrive à l'heure, une seule fois |
+| 10.2 | « rappelle-moi demain à 9 h » | Le modèle calcule la bonne date ; vérifier avec « qu'est-ce que j'ai de prévu ? » |
+| 10.3 | Même chose avec le petit modèle de repli | C'est là que l'arithmétique des dates lâche en premier |
+| 10.4 | « rappelle-moi hier » | Refusé et rattrapé par le modèle, pas de rappel fantôme |
+| 10.5 | Lister puis annuler par son numéro | Annulation au clavier (destructif) |
+| 10.6 | Quitter Jarvis, attendre que l'heure passe, relancer | Livré au démarrage, préfixé « while you were away » |
+| 10.7 | Rappel qui échoit pendant une réponse | Attend la fin de la réponse, ne coupe pas |
+| 10.8 | Rappel qui échoit pendant l'attente du mot d'activation | Livré sans qu'on ait à parler |
+| 10.9 | Rappel vieux de plus d'une semaine | Pas livré, mais toujours dans la liste |
+
+10.3 est le vrai risque de cette fonctionnalité : un 3B qui se trompe d'un jour
 est pire qu'un 3B qui dit ne pas savoir.
 
-## 10. Recherche documentaire
+## 11. Recherche documentaire
 
 Ce que la suite ne peut pas faire : mesurer si la recherche trouve la bonne
 note dans *vos* documents, avec un vrai modèle d'embedding.
@@ -222,24 +248,24 @@ jarvis-index --status
 
 | # | Scénario | Attendu |
 |---|---|---|
-| 10.1 | Question dont la réponse est dans une note précise | La bonne note, citée par son chemin |
-| 10.2 | Même question formulée autrement | Toujours la bonne note — c'est ce que les embeddings achètent sur du lexical |
-| 10.3 | Question en anglais sur une note en français | Fonctionne, ou noter la limite du modèle |
-| 10.4 | Question dont la réponse n'est **nulle part** | Ne doit pas inventer ; relever les similarités affichées et régler `RAG_MIN_SIMILARITY` |
-| 10.5 | Réponse à cheval sur deux passages | Trouvée depuis les deux côtés (c'est le rôle de `RAG_CHUNK_OVERLAP`) |
-| 10.6 | Ré-indexer sans rien changer | « 0 indexed, N unchanged », quasi instantané |
-| 10.7 | Modifier une note puis ré-indexer | Seule celle-là est ré-embarquée |
-| 10.8 | Supprimer une note puis ré-indexer | Elle disparaît de l'index |
-| 10.9 | `jarvis-index ~/.ssh` | Refusé par le bac à sable |
-| 10.10 | Après une recherche, demander une écriture | Confirmation **au clavier** (contenu non fiable dans le tour) |
-| 10.11 | Deux recherches dans le même tour | La seconde ne réescalade pas |
-| 10.12 | Changer `RAG_EMBED_MODEL` sans ré-indexer | Refus explicite, pas de résultats absurdes |
-| 10.13 | Indexer une arborescence réelle (1000+ fichiers) | Noter la durée et la taille de `documents.db` |
+| 11.1 | Question dont la réponse est dans une note précise | La bonne note, citée par son chemin |
+| 11.2 | Même question formulée autrement | Toujours la bonne note — c'est ce que les embeddings achètent sur du lexical |
+| 11.3 | Question en anglais sur une note en français | Fonctionne, ou noter la limite du modèle |
+| 11.4 | Question dont la réponse n'est **nulle part** | Ne doit pas inventer ; relever les similarités affichées et régler `RAG_MIN_SIMILARITY` |
+| 11.5 | Réponse à cheval sur deux passages | Trouvée depuis les deux côtés (c'est le rôle de `RAG_CHUNK_OVERLAP`) |
+| 11.6 | Ré-indexer sans rien changer | « 0 indexed, N unchanged », quasi instantané |
+| 11.7 | Modifier une note puis ré-indexer | Seule celle-là est ré-embarquée |
+| 11.8 | Supprimer une note puis ré-indexer | Elle disparaît de l'index |
+| 11.9 | `jarvis-index ~/.ssh` | Refusé par le bac à sable |
+| 11.10 | Après une recherche, demander une écriture | Confirmation **au clavier** (contenu non fiable dans le tour) |
+| 11.11 | Deux recherches dans le même tour | La seconde ne réescalade pas |
+| 11.12 | Changer `RAG_EMBED_MODEL` sans ré-indexer | Refus explicite, pas de résultats absurdes |
+| 11.13 | Indexer une arborescence réelle (1000+ fichiers) | Noter la durée et la taille de `documents.db` |
 
-10.4 est le plus important et le plus facile à négliger : les k plus proches
+11.4 est le plus important et le plus facile à négliger : les k plus proches
 renvoient toujours quelque chose.
 
-## 11. Mot d'activation
+## 12. Mot d'activation
 
 Ce que la suite ne peut pas faire : prononcer « hey Jarvis » dans une pièce.
 Nécessite `pip install "jarvis-assistant[wakeword]"`, les modèles téléchargés,
@@ -247,47 +273,47 @@ et `WAKE_WORD=true`.
 
 | # | Scénario | Attendu |
 |---|---|---|
-| 11.1 | « hey Jarvis » seul, puis attendre | Déclenche, puis enregistre |
-| 11.2 | « hey Jarvis quelle heure est-il » d'une traite | La commande est transcrite **en entier** — c'est le point de `WAKE_WORD_TAIL` |
-| 11.3 | Conversation normale dans la pièce, sans la phrase | Rien ne se déclenche pendant 10 min |
-| 11.4 | Télévision ou musique en fond | Compter les faux positifs ; ajuster `WAKE_WORD_THRESHOLD` |
-| 11.5 | Enchaîner une question dans les `WAKE_WORD_FOLLOW_UP` secondes | Pas besoin de répéter la phrase |
-| 11.6 | Attendre la fin de la fenêtre puis parler | La phrase est de nouveau exigée |
-| 11.7 | Depuis l'autre bout de la pièce | Noter la distance à laquelle ça cesse de marcher |
-| 11.8 | Paquet absent (`WAKE_WORD=true` sans l'extra) | Démarre quand même, un message le dit une fois |
-| 11.9 | Ctrl-C pendant l'attente | Sortie immédiate, pas de processus qui traîne |
-| 11.10 | Charge CPU pendant l'attente | Doit rester marginale ; sinon vérifier tflite-runtime |
+| 12.1 | « hey Jarvis » seul, puis attendre | Déclenche, puis enregistre |
+| 12.2 | « hey Jarvis quelle heure est-il » d'une traite | La commande est transcrite **en entier** — c'est le point de `WAKE_WORD_TAIL` |
+| 12.3 | Conversation normale dans la pièce, sans la phrase | Rien ne se déclenche pendant 10 min |
+| 12.4 | Télévision ou musique en fond | Compter les faux positifs ; ajuster `WAKE_WORD_THRESHOLD` |
+| 12.5 | Enchaîner une question dans les `WAKE_WORD_FOLLOW_UP` secondes | Pas besoin de répéter la phrase |
+| 12.6 | Attendre la fin de la fenêtre puis parler | La phrase est de nouveau exigée |
+| 12.7 | Depuis l'autre bout de la pièce | Noter la distance à laquelle ça cesse de marcher |
+| 12.8 | Paquet absent (`WAKE_WORD=true` sans l'extra) | Démarre quand même, un message le dit une fois |
+| 12.9 | Ctrl-C pendant l'attente | Sortie immédiate, pas de processus qui traîne |
+| 12.10 | Charge CPU pendant l'attente | Doit rester marginale ; sinon vérifier tflite-runtime |
 
-11.9 n'est pas théorique : l'attente tourne dans un fil que Ctrl-C n'atteint
+12.9 n'est pas théorique : l'attente tourne dans un fil que Ctrl-C n'atteint
 pas, et l'interpréteur joint ce fil en sortant.
 
-## 12. Barge-in
+## 13. Barge-in
 
 **Désactivé par défaut** (`BARGE_IN=false`) : un micro ouvert dans la même
 pièce qu'un haut-parleur entend le haut-parleur, et Jarvis se coupe lui-même.
 
 | # | Scénario | Attendu |
 |---|---|---|
-| 12.1 | Au casque, `BARGE_IN=true`, parler pendant la réponse | Coupe net, ouvre un nouveau tour |
-| 12.2 | Au casque, tousser pendant la réponse | Ne coupe pas (parole non soutenue) |
-| 12.3 | Sur haut-parleurs ouverts, `BARGE_IN=true` | Vérifier s'il se coupe seul — si oui, laisser à `false` |
-| 12.4 | Couper puis reprendre | Les premiers mots prononcés pendant la coupure ne sont pas perdus |
+| 13.1 | Au casque, `BARGE_IN=true`, parler pendant la réponse | Coupe net, ouvre un nouveau tour |
+| 13.2 | Au casque, tousser pendant la réponse | Ne coupe pas (parole non soutenue) |
+| 13.3 | Sur haut-parleurs ouverts, `BARGE_IN=true` | Vérifier s'il se coupe seul — si oui, laisser à `false` |
+| 13.4 | Couper puis reprendre | Les premiers mots prononcés pendant la coupure ne sont pas perdus |
 
 ---
 
-## 13. Session longue
+## 14. Session longue
 
 Une heure d'usage réel, pas un script.
 
 | # | Point de contrôle | Attendu |
 |---|---|---|
-| 13.1 | Mémoire du processus après 50 tours | Stable, pas de croissance continue |
-| 13.2 | Fichiers temporaires (`/tmp`) | Rien ne s'accumule |
-| 13.3 | `jarvis.log` | Lisible, pas de secret, pas de contenu de fichier entier |
-| 13.4 | Historique après 20 tours | Le contexte ancien tombe sans casser un résultat d'outil |
-| 13.5 | `jarvis --resume` à la session suivante | La mémoire de la veille est là |
-| 13.6 | Ctrl-C en plein tour | Sortie propre, base de données non corrompue |
-| 13.7 | Changer de langue en cours de session, dans les deux sens | STT et réponses suivent |
+| 14.1 | Mémoire du processus après 50 tours | Stable, pas de croissance continue |
+| 14.2 | Fichiers temporaires (`/tmp`) | Rien ne s'accumule |
+| 14.3 | `jarvis.log` | Lisible, pas de secret, pas de contenu de fichier entier |
+| 14.4 | Historique après 20 tours | Le contexte ancien tombe sans casser un résultat d'outil |
+| 14.5 | `jarvis --resume` à la session suivante | La mémoire de la veille est là |
+| 14.6 | Ctrl-C en plein tour | Sortie propre, base de données non corrompue |
+| 14.7 | Changer de langue en cours de session, dans les deux sens | STT et réponses suivent |
 
 ---
 
@@ -306,11 +332,12 @@ Une heure d'usage réel, pas un script.
 | 6. Politique | | | |
 | 7. MCP | | | |
 | 8. Fournisseurs | | | |
-| 9. Rappels | | | |
-| 10. Recherche documentaire | | | |
-| 11. Mot d'activation | | | |
-| 12. Barge-in | | | |
-| 13. Session longue | | | |
+| 9. Vision | | | |
+| 10. Rappels | | | |
+| 11. Recherche documentaire | | | |
+| 12. Mot d'activation | | | |
+| 13. Barge-in | | | |
+| 14. Session longue | | | |
 
 Tout « à revoir » qui se reproduit devient une entrée dans
 [`AUDIT.md`](AUDIT.md) avec un test `xfail(strict=True)` — c'est le mécanisme

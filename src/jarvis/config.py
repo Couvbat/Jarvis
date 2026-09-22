@@ -145,6 +145,15 @@ class Settings(BaseSettings):
     mcp_connect_timeout: float = 15.0
     mcp_call_timeout: float = 60.0
 
+    # Vision
+    # Off by default: it is a separate model to pull (`ollama pull llava`),
+    # and a text-only setup should not be offered a tool that cannot work.
+    vision: bool = False
+    # A multimodal model, asked alongside the chat model rather than instead
+    # of it - so a text-only 70B on the NAS keeps answering the questions.
+    vision_model: str = "llava"
+    vision_max_bytes: int = 8_000_000
+
     # Reminders
     # Off costs nothing but the three tools; on, reminders survive restarts
     # and anything that came due while Jarvis was off is delivered at startup.
