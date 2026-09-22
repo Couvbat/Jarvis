@@ -76,6 +76,7 @@ src/jarvis/
 ├── rag/                  recherche documentaire (index SQLite + embeddings)
 ├── reminders.py          rappels planifiés (SQLite)
 ├── vision.py             modèle multimodal pour les images (optionnel)
+├── mcp_server.py         les outils de Jarvis, servis en MCP (§5.6)
 ├── tools/
 │   ├── registry.py       registre unifié, namespacing, dispatch
 │   ├── selection.py      sélection top-k (cf. §4)
@@ -271,6 +272,31 @@ l'outil : « supprimer 47 fichiers dans ~/Documents » et non « appeler
 - Garde SSRF sur toute sortie HTTP (schéma, loopback, link-local, RFC 1918).
 - Les résultats d'outils sont insérés dans le prompt comme **données
   délimitées**, jamais comme instructions.
+
+---
+
+### 5.6 Jarvis côté serveur
+
+Le miroir du rôle de client : les mêmes outils, offerts à n'importe quel
+client MCP. Toute la conception tient à une question — **qui répond à la
+confirmation ?** En interactif, une personne ; ici, l'appelant est un
+programme.
+
+S'en remettre au moteur de politique tel quel refuserait tout (même une
+lecture est confirmée dans une session parlée) ; approuver d'office jetterait
+la seule chose qui sépare un modèle du disque. La règle est donc **énoncée**,
+au lieu d'être esquivée :
+
+| | |
+|---|---|
+| Autorisé | les lectures dans `ALLOWED_DIRECTORIES`, et ce que l'utilisateur a approuvé de façon persistante dans Jarvis |
+| Refusé | écritures, suppressions, et **tout** appel fait après l'entrée de contenu non fiable |
+| Refusé ici | la sortie réseau — récupérer une page est en lecture seule et reste une requête qui quitte la machine |
+
+Plus permissif qu'une session interactive pour les lectures, plus strict pour
+le reste : c'est le compromis honnête quand il n'y a personne à qui demander.
+Le bac à sable *est* l'autorisation d'une lecture — c'est le réglage dont
+tout le métier est de dire quels fichiers un programme peut voir.
 
 ---
 

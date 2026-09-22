@@ -76,6 +76,7 @@ Issues = "https://github.com/Couvbat/Jarvis/issues"
 jarvis = "jarvis.__main__:main"
 jarvis-setup-piper = "jarvis.setup_piper:main"
 jarvis-index = "jarvis.rag.indexer:main"
+jarvis-mcp = "jarvis.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

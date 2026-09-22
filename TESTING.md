@@ -172,6 +172,9 @@ propres pannes.
 | 7.5 | `trust: readonly` | Les outils d'écriture ne sont même pas exposés |
 | 7.6 | Deux serveurs exposant un outil du même nom | Pas de collision : les noms sont préfixés |
 | 7.7 | Quitter Jarvis pendant qu'un serveur tourne | Les sous-processus s'arrêtent, rien ne reste |
+| 7.8 | Brancher `jarvis-mcp` dans un vrai client MCP | Les outils en lecture seule apparaissent |
+| 7.9 | Depuis ce client, demander une écriture | Refus expliquant qu'il faut passer par Jarvis |
+| 7.10 | Depuis ce client, lire hors du bac à sable | Refusé par le bac à sable |
 
 ---
 

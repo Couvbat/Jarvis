@@ -10,7 +10,8 @@ qui passera au vert le jour où le correctif est appliqué.
 
 > **Statut au 22 septembre 2026 — Phases 0 à 4 du plan livrées, plus les
 > fournisseurs LLM ordonnés (3.5), le mot d'activation (5.1), la recherche
-> documentaire (5.2), les rappels (5.3) et la vision (5.4).**
+> documentaire (5.2), les rappels (5.3), la vision (5.4) et Jarvis serveur
+> MCP (5.5).**
 > **Les 34 anomalies de ce rapport sont corrigées et vérifiées par tests.**
 > Il ne reste aucun marqueur `xfail`.
 > Les trois anomalies bloquantes de la §2 et les quatre failles de la §3 sont

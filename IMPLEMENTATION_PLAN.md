@@ -7,8 +7,10 @@ Architecture visée : [`ARCHITECTURE.md`](ARCHITECTURE.md).
 Campagne manuelle : [`TESTING.md`](TESTING.md).
 
 > **Phases 0 à 4 livrées**, plus les fournisseurs LLM ordonnés (3.5), le mot
-> d'activation (5.1), la recherche documentaire (5.2), les rappels (5.3) et
-> la vision (5.4). 1241 tests passants, 0 `xfail`, 97 % de couverture.
+> d'activation (5.1), la recherche documentaire (5.2), les rappels (5.3), la
+> vision (5.4) et Jarvis serveur MCP (5.5). 1270 tests passants, 0 `xfail`,
+> 97 % de couverture. Reste #9 multi-utilisateur, écartée sciemment : c'est
+> un second projet, pas une fonctionnalité.
 
 **Règle de sortie de chaque tâche** : le ou les tests `xfail(strict)`
 correspondants passent au vert. Un `xfail` strict qui réussit fait échouer
@@ -444,8 +446,8 @@ C'est le principal gain de l'orientation MCP : quatre fonctionnalités estimées
 | #1 Mot-clé d'activation | ✅ **livrée (5.1)** | openWakeWord, qui tourne en local et livre un modèle `hey_jarvis` pré-entraîné. Porcupine écarté comme prévu : une clé d'API Picovoice est exactement ce que « 100 % local » exclut. |
 | #2 RAG documentaire | ✅ **livrée (5.2)** | Le partage d'embeddings avec la sélection d'outils n'a jamais eu lieu : 2.4 a finalement été lexicale. Les embeddings viennent donc d'Ollama (`nomic-embed-text`), ce qui coûte zéro dépendance Python là où `sentence-transformers` aurait coûté torch. |
 | #11 Vision (LLaVA) | ✅ **livrée (5.4)** | Un modèle *séparé* du modèle de chat : le conditionner au multimodal reviendrait à choisir entre « voit » et « réfléchit ». La capture d'écran reste dehors — binaire propre au serveur d'affichage, et une question de vie privée différente. |
-| #9 Multi-utilisateur | Plus tard | Suppose un modèle de permissions par utilisateur — un projet en soi |
-| #13 API / WebSocket | Plus tard | Devient « Jarvis exposé *comme* serveur MCP », plus intéressant que REST, mais orthogonal au rôle de client |
+| #9 Multi-utilisateur | **Écartée, sciemment** | La reconnaissance de locuteur demande des embeddings vocaux (`resemblyzer`, `pyannote`) — donc torch, ce que la Phase 5.2 a précisément réussi à éviter — *et* un modèle de permissions par utilisateur qui touche le bac à sable, les approbations et l'historique. C'est un second projet, pas une fonctionnalité. |
+| #13 API / WebSocket | ✅ **livrée (5.5)** | Devenue « Jarvis exposé *comme* serveur MCP », ce qui était bien plus intéressant que REST : un client MCP y gagne le bac à sable de Jarvis, et l'utilisateur un seul endroit où décider quels répertoires sont accessibles. |
 
 ---
 
@@ -617,6 +619,46 @@ propriété et ne dépend plus de la machine.
 
 ---
 
+## Phase 5.5 — Jarvis serveur MCP ✅ livrée
+
+Le miroir de la Phase 2 : les mêmes outils, offerts à n'importe quel client.
+
+| Tâche | Détail |
+|---|---|
+| `mcp_server.py` | `on_list_tools` / `on_call_tool` sur le registre existant |
+| `jarvis-mcp` | quatrième point d'entrée, avec `--list` |
+| Règle d'autorisation | énoncée dans une fonction, `permitted()`, plutôt que disséminée |
+
+**La décision qui compte, et le faux départ qui l'a produite** : le premier
+jet s'en remettait entièrement au moteur de politique — « tout ce qui demande
+une confirmation est refusé ». Les tests ont montré que cela refusait
+*absolument tout*, y compris `fs__read` : en interactif, même une lecture est
+confirmée, parce qu'il est bon marché de dire oui une fois et de s'en
+souvenir. Le serveur aurait été inutile.
+
+La règle est donc écrite explicitement :
+
+- **Autorisé** : les lectures dans le bac à sable configuré, et ce que
+  l'utilisateur a approuvé de façon persistante dans Jarvis.
+- **Refusé** : écritures, suppressions, et tout appel fait après l'entrée de
+  contenu non fiable dans la session.
+- **Refusé ici** : la sortie réseau. Récupérer une page est en lecture seule
+  et reste une requête qui quitte la machine de quelqu'un.
+
+Plus permissif qu'une session interactive pour les lectures, plus strict pour
+le reste. Le bac à sable *est* l'autorisation d'une lecture.
+
+**Ce qui est annoncé ne contient que ce qui peut aboutir** : une boîte à
+outils pleine de choses inappelables est pire qu'une petite. Mais la liste
+n'est qu'un indice — un client qui connaît un nom peut toujours appeler et se
+faire refuser, ce qu'un test vérifie.
+
+Les tests pilotent un vrai client MCP sur le transport en mémoire du SDK,
+comme ceux du côté client : le protocole est authentique, seule la frontière
+de processus disparaît.
+
+---
+
 ## Charge totale
 
 | Phase | Charge |
@@ -632,6 +674,7 @@ propriété et ne dépend plus de la machine.
 | 5.2 — Recherche documentaire | 1 j |
 | 5.3 — Rappels | 0,5 j |
 | 5.4 — Vision | 0,5 j |
+| 5.5 — Jarvis serveur MCP | 0,5 j |
 
 Phase 5 selon les priorités, la majeure partie étant devenue de la
 configuration.

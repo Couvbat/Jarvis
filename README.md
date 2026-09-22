@@ -429,6 +429,7 @@ Jarvis/
 │   ├── conversation_store.py   #   conversation history (SQLite)
 │   ├── reminders.py            #   scheduled reminders (SQLite)
 │   ├── vision.py               #   multimodal model for images
+│   ├── mcp_server.py           #   Jarvis's own tools, served over MCP
 │   ├── setup_piper.py          #   Piper installer (`jarvis-setup-piper`)
 │   ├── speech/                 #   sentence chunking, TTS queue, barge-in, wake word
 │   ├── rag/                    #   document index: chunking, embeddings, search
@@ -679,6 +680,43 @@ against the installed package; from a bare checkout it falls back to `src/`.
 For the checks the suite cannot make - real transcription quality, a physical
 microphone, measured latency, a remote Ollama, third-party MCP servers - see
 [TESTING.md](TESTING.md).
+
+### Jarvis as an MCP server
+
+The mirror of the above: Jarvis's own tools, offered to any MCP client, so a
+self-hosted setup has **one** place where "which directories may be touched"
+is decided rather than one per client.
+
+```jsonc
+// in your MCP client's configuration
+{
+  "mcpServers": {
+    "jarvis": { "command": "jarvis-mcp" }
+  }
+}
+```
+
+`jarvis-mcp --list` shows what would be offered. Today that is the read-only
+filesystem tools, document search once you have an index, and the reminder
+list.
+
+The interesting part is what it *refuses*, and why. Interactively a person
+answers the confirmations; here the caller is a program and there is nobody
+to ask. Deferring to the policy engine unchanged would refuse everything —
+even a plain read is confirmed in a spoken session — and auto-approving would
+throw away the only thing between a model and your disk. So the rule is
+stated explicitly:
+
+| | |
+|---|---|
+| **Allowed** | reads inside `ALLOWED_DIRECTORIES`, and anything you approved out of band in Jarvis itself |
+| **Refused** | writes, deletions, and every call made after untrusted content entered the session |
+| **Refused here** | egress — fetching a page is read-only and still a request leaving your machine |
+
+Looser than an interactive session for reads, stricter for everything else.
+The sandbox *is* the authorisation for a read: it is the setting whose whole
+job is saying which files a program may see. Refusals come back with their
+reason, so the client can tell you what to run in Jarvis directly.
 
 ### Connecting MCP servers
 
