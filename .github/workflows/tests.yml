@@ -64,8 +64,33 @@ jobs:
           python-version: "3.11"
       - run: pip install build
       - run: python -m build
-      - name: Install the wheel and check what it contains
+
+      - name: Every source module is in the wheel
+        # The point of this job. Compares the built wheel against the source
+        # tree rather than importing, so it needs no dependencies at all and
+        # cannot pass by accident on a machine that happens to have them.
         run: |
+          python - <<'CHECK'
+          import glob, pathlib, zipfile
+
+          wheel = glob.glob("dist/*.whl")[0]
+          shipped = {n for n in zipfile.ZipFile(wheel).namelist() if n.endswith(".py")}
+          source = {
+              str(path.relative_to("src"))
+              for path in pathlib.Path("src").rglob("*.py")
+              if "__pycache__" not in path.parts
+          }
+          missing = sorted(source - shipped)
+          assert not missing, f"missing from {wheel}: {missing}"
+          print(f"{wheel}: all {len(source)} modules present")
+          CHECK
+
+      - name: Install the wheel and import through it
+        # requirements-test.txt as well as the wheel: --no-deps alone leaves
+        # even loguru out, so the imports below would fail for a reason that
+        # has nothing to do with the package being well formed.
+        run: |
+          pip install -r requirements-test.txt
           pip install dist/*.whl --no-deps
           python -c "import jarvis; print(jarvis.__version__)"
           python -c "import jarvis.tools.mcp.manager, jarvis.policy.engine, jarvis.speech.pipeline"
