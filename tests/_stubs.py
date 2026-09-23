@@ -14,6 +14,7 @@ these tests exist to catch.
 
 import sys
 import types
+import zlib
 from collections.abc import Callable
 from typing import Any
 
@@ -366,6 +367,22 @@ class _AsyncClient:
             return _AsyncStream(response)
         return response
 
+    async def embed(self, model: str = "", input: Any = "", **kwargs: Any) -> Any:
+        """Mirrors ``AsyncClient.embed``: one vector per input, in a response
+        object rather than a bare list."""
+        module = _OLLAMA_MODULE["instance"]
+        texts = [input] if isinstance(input, str) else list(input)
+        module.embed_calls.append({"host": self.host, "model": model,
+                                   "input": texts})
+
+        error = module.host_embed_errors.get(self.host, module.embed_error)
+        if error is not None:
+            raise error
+
+        return SubscriptableModel(
+            embeddings=[module.embedding_for(text) for text in texts]
+        )
+
     async def list(self) -> Any:
         module = _OLLAMA_MODULE["instance"]
         module.list_hosts.append(self.host)
@@ -401,9 +418,36 @@ class _OllamaModule(types.ModuleType):
         self.host_models: dict[str | None, list[str]] = {}
         self.host_list_errors: dict[str | None, Exception] = {}
         self.host_chat_errors: dict[str | None, Exception] = {}
+        #: embedding calls made, and how to answer them
+        self.embed_calls: list[dict] = []
+        self.embed_error: Exception | None = None
+        self.host_embed_errors: dict[str | None, Exception] = {}
+        self.embed_dimensions = 8
+        #: set to return a fixed vector regardless of the text
+        self.embedding_override: list[float] | None = None
         self.AsyncClient = _AsyncClient
         self.StreamThenFail = StreamThenFail
         _OLLAMA_MODULE["instance"] = self
+
+    def embedding_for(self, text: str) -> list:
+        """A deterministic vector for one text.
+
+        Derived from the characters, so texts that share words land near each
+        other and a nearest-neighbour test measures something rather than
+        asserting on noise.
+        """
+        if self.embedding_override is not None:
+            return list(self.embedding_override)
+
+        vector = [0.0] * self.embed_dimensions
+        for word in str(text).lower().split():
+            # crc32, not hash(): PYTHONHASHSEED randomises str hashing per
+            # process, and a doubling stub is no use if it answers differently
+            # on every run.
+            vector[zlib.crc32(word.encode()) % self.embed_dimensions] += 1.0
+        if not any(vector):
+            vector[0] = 1.0
+        return vector
 
     def chat(self, **kwargs: Any) -> Any:
         # The real client serialises the payload immediately; snapshot the
@@ -431,9 +475,79 @@ class _OllamaModule(types.ModuleType):
         self.host_models.clear()
         self.host_list_errors.clear()
         self.host_chat_errors.clear()
+        self.embed_calls.clear()
+        self.host_embed_errors.clear()
+        self.embed_error = None
+        self.embed_dimensions = 8
+        self.embedding_override = None
         self.error = None
         self.list_error = None
         self.models = ["llama3.1:8b"]
+
+
+# --------------------------------------------------------------------------- #
+# openwakeword
+# --------------------------------------------------------------------------- #
+
+class FakeWakeModel:
+    """Mirrors ``openwakeword.model.Model``, including what it refuses.
+
+    The real model rejects anything that is not an ndarray, and answers with a
+    score per loaded model rather than a bare float.  It also accumulates
+    audio internally, which is why Jarvis carves exact 1280-sample frames: the
+    sizes it was fed are recorded here so a test can hold that to account.
+    """
+
+    #: scores handed out in order; the last one repeats once exhausted
+    scripted_scores: list[float] = []
+    #: every model instance built, for assertions on constructor kwargs
+    instances: list["FakeWakeModel"] = []
+
+    def __init__(self, wakeword_models: list | None = None, **kwargs: Any):
+        if not wakeword_models:
+            raise ValueError("no wakeword models specified")
+        self.wakeword_models = list(wakeword_models)
+        self.kwargs = kwargs
+        self.scores = list(FakeWakeModel.scripted_scores)
+        self.frame_sizes: list[int] = []
+        self.resets = 0
+        FakeWakeModel.instances.append(self)
+
+    def predict(self, x: Any, **kwargs: Any) -> dict:
+        if not isinstance(x, np.ndarray):
+            raise ValueError(
+                "The input audio data (x) must by a Numpy array, instead "
+                f"received an object of type {type(x)}."
+            )
+        self.frame_sizes.append(len(x))
+        score = self.scores.pop(0) if self.scores else 0.0
+        return {self.wakeword_models[0]: score}
+
+    def reset(self) -> None:
+        self.resets += 1
+
+
+class _OpenWakeWordModule(types.ModuleType):
+    def __init__(self) -> None:
+        super().__init__("openwakeword")
+        self.Model = FakeWakeModel
+        #: raised by Model(...) when set, standing in for missing model files
+        self.load_error: Exception | None = None
+
+        model_module = types.ModuleType("openwakeword.model")
+        model_module.Model = self._build
+        sys.modules["openwakeword.model"] = model_module
+        self.model = model_module
+
+    def _build(self, *args: Any, **kwargs: Any) -> FakeWakeModel:
+        if self.load_error is not None:
+            raise self.load_error
+        return FakeWakeModel(*args, **kwargs)
+
+    def reset(self) -> None:
+        self.load_error = None
+        FakeWakeModel.scripted_scores = []
+        FakeWakeModel.instances = []
 
 
 # --------------------------------------------------------------------------- #
@@ -447,6 +561,7 @@ def install() -> dict:
         "webrtcvad": _WebrtcVadModule(),
         "faster_whisper": _FasterWhisperModule(),
         "ollama": _OllamaModule(),
+        "openwakeword": _OpenWakeWordModule(),
     }
     for name, module in modules.items():
         sys.modules[name] = module

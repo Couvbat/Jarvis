@@ -6,9 +6,11 @@ Architecture visée : [`ARCHITECTURE.md`](ARCHITECTURE.md).
 État actuel : [`AUDIT.md`](AUDIT.md).
 Campagne manuelle : [`TESTING.md`](TESTING.md).
 
-> **Phases 0 à 4 livrées.** 1025 tests passants, 0 `xfail`, 96 % de
-> couverture. Il reste la Phase 5, qui est un choix de fonctionnalités, pas
-> une dette.
+> **Phases 0 à 4 livrées**, plus les fournisseurs LLM ordonnés (3.5), le mot
+> d'activation (5.1), la recherche documentaire (5.2), les rappels (5.3), la
+> vision (5.4) et Jarvis serveur MCP (5.5). 1270 tests passants, 0 `xfail`,
+> 97 % de couverture. Reste #9 multi-utilisateur, écartée sciemment : c'est
+> un second projet, pas une fonctionnalité.
 
 **Règle de sortie de chaque tâche** : le ou les tests `xfail(strict)`
 correspondants passent au vert. Un `xfail` strict qui réussit fait échouer
@@ -439,12 +441,221 @@ C'est le principal gain de l'orientation MCP : quatre fonctionnalités estimées
 | Feature | Position | Remarque |
 |---|---|---|
 | #3 Persistance des conversations | **Phase 3** | Prérequis du RAG, des analytics et du multi-utilisateur |
+| #6 Planification et rappels | ✅ **livrée (5.3)** | Ni `schedule` ni APScheduler : la livraison a lieu entre les tours de la boucle existante, et le modèle fait la conversion des dates à la place d'une bibliothèque. |
 | #16 Meilleure récupération sur erreur | Réparti sur 0→3 | Largement traité en chemin |
-| #1 Mot-clé d'activation | **Après Phase 3** | Exige un VAD fonctionnel (Phase 0.1) et une boucle audio continue (barge-in, Phase 3). Placé en premier dans `FEATURES_IDEA.md`, mais l'implémenter avant reviendrait à bâtir sur du sable. **Porcupine exige une clé d'API Picovoice** — incompatible avec l'objectif local ; évaluer `openWakeWord`. |
-| #2 RAG documentaire | Après MCP | Partage les embeddings avec la sélection d'outils (Phase 2.4), ce qui en réduit le coût. Alternative : un serveur MCP dédié, au prix d'un peu de latence. |
-| #11 Vision (LLaVA) | Plus tard | Ollama gère les modèles multimodaux ; le coût est surtout en RAM |
-| #9 Multi-utilisateur | Plus tard | Suppose un modèle de permissions par utilisateur — un projet en soi |
-| #13 API / WebSocket | Plus tard | Devient « Jarvis exposé *comme* serveur MCP », plus intéressant que REST, mais orthogonal au rôle de client |
+| #1 Mot-clé d'activation | ✅ **livrée (5.1)** | openWakeWord, qui tourne en local et livre un modèle `hey_jarvis` pré-entraîné. Porcupine écarté comme prévu : une clé d'API Picovoice est exactement ce que « 100 % local » exclut. |
+| #2 RAG documentaire | ✅ **livrée (5.2)** | Le partage d'embeddings avec la sélection d'outils n'a jamais eu lieu : 2.4 a finalement été lexicale. Les embeddings viennent donc d'Ollama (`nomic-embed-text`), ce qui coûte zéro dépendance Python là où `sentence-transformers` aurait coûté torch. |
+| #11 Vision (LLaVA) | ✅ **livrée (5.4)** | Un modèle *séparé* du modèle de chat : le conditionner au multimodal reviendrait à choisir entre « voit » et « réfléchit ». La capture d'écran reste dehors — binaire propre au serveur d'affichage, et une question de vie privée différente. |
+| #9 Multi-utilisateur | **Écartée, sciemment** | La reconnaissance de locuteur demande des embeddings vocaux (`resemblyzer`, `pyannote`) — donc torch, ce que la Phase 5.2 a précisément réussi à éviter — *et* un modèle de permissions par utilisateur qui touche le bac à sable, les approbations et l'historique. C'est un second projet, pas une fonctionnalité. |
+| #13 API / WebSocket | ✅ **livrée (5.5)** | Devenue « Jarvis exposé *comme* serveur MCP », ce qui était bien plus intéressant que REST : un client MCP y gagne le bac à sable de Jarvis, et l'utilisateur un seul endroit où décider quels répertoires sont accessibles. |
+
+---
+
+## Phase 5.1 — Mot d'activation ✅ livrée
+
+Le premier élément de la Phase 5 dont les prérequis étaient tenus : un VAD qui
+marche (0.1) et une boucle audio continue (3.2).
+
+| Tâche | Détail |
+|---|---|
+| `speech/wake.py` | détecteur openWakeWord, trames de 1280 échantillons, import paresseux |
+| `AudioHandler.wait_for_wake` | écoute sans enregistrer, puis rend l'audio qui suit la phrase |
+| Fenêtre de relance | après une réponse, `WAKE_WORD_FOLLOW_UP` secondes sans avoir à répéter la phrase |
+| Dépendance optionnelle | extra `[wakeword]` : onnxruntime et tflite-runtime n'ont pas de roue partout, et taper ses commandes reste légitime |
+
+**Décisions payées par un test** :
+
+- **La commande dite dans la même respiration est conservée.** On dit « hey
+  Jarvis quelle heure est-il », pas « hey Jarvis », pause, « quelle heure
+  est-il ». L'audio qui suit la phrase est passé en `prefix` au même mécanisme
+  que le barge-in utilise pour les mots prononcés avant qu'il ne réagisse.
+- **Une relance n'exige pas la phrase.** La redire à chaque tour d'un échange
+  est ce que les gens cessent de faire.
+- **Une interruption n'exige jamais la phrase.** Le barge-in *est* déjà
+  l'utilisateur qui parle.
+- **Paquet ou modèles absents : Jarvis démarre quand même** et écoute comme
+  avant, en le disant une fois. Refuser de démarrer parce que le mains-libres
+  est indisponible serait pire que de ne pas l'avoir.
+
+**Trouvé en y réfléchissant, pas par les tests** : l'attente tourne dans un
+fil que Ctrl-C n'atteint pas, et l'interpréteur joint ce fil en sortant — une
+session réveillée ne se terminait donc jamais. Vérifié en envoyant un SIGINT à
+un Jarvis en attente : le processus devait être tué. Corrigé par un drapeau
+d'arrêt posé par `aclose()` et relu par l'écoute, avec un test de
+non-régression.
+
+**Non vérifiable ici** : la détection réelle dans une pièce, les faux positifs
+sur une télévision allumée, la portée. Section 9 de [`TESTING.md`](TESTING.md).
+
+---
+
+## Phase 5.2 — Recherche documentaire ✅ livrée
+
+| Tâche | Détail |
+|---|---|
+| `rag/store.py` | SQLite + cosinus en force brute sur numpy. 20 000 × 768 float32 = 61 Mo et quelques millisecondes : chromadb n'achèterait rien et coûterait une dépendance, un démon et un second endroit où les données rancissent. |
+| `rag/embeddings.py` | Ollama, via le même `ProviderPool` que le chat — donc calculés sur le NAS quand le NAS est là, et repli identique |
+| `rag/indexer.py` | découpe sur les paragraphes, puis les phrases, puis les caractères ; incrémental par mtime et taille |
+| `jarvis-index` | troisième point d'entrée, avec `--status`, `--force` |
+| `tools/local/documents.py` | `docs__search`, enregistré **seulement** s'il y a un index à interroger |
+
+**Décisions payées par un test** :
+
+- **Embeddings par Ollama, pas `sentence-transformers`.** Le plan tablait sur
+  un partage avec la sélection d'outils ; celle-ci étant restée lexicale, il
+  n'y avait rien à partager. Ollama tourne déjà : zéro dépendance ajoutée, et
+  les embeddings suivent le fournisseur qui répond.
+- **La recherche est un outil que le modèle appelle**, pas du contexte injecté
+  à chaque tour : « quelle heure est-il » ne doit pas traîner vos notes dans
+  l'invite.
+- **Le modèle d'embedding est enregistré avec l'index.** Deux modèles donnent
+  des vecteurs incomparables et l'échec est *silencieux* : la recherche
+  continue de marcher et renvoie des absurdités assurées. Refusé, donc, pas
+  moyenné.
+- **Le contenu retrouvé est non fiable**, ce que `fs__read` n'est pas : là,
+  c'est l'utilisateur qui a nommé le fichier ; ici, c'est un score de
+  similarité qui l'a choisi. L'`origin` étant l'index et non chaque fichier,
+  chercher deux fois ne réescalade pas — c'est exactement ce pour quoi la
+  règle d'origine existe.
+- **Le bac à sable s'applique à l'indexation.** Indexer un fichier, c'est
+  mettre son contenu à une similarité de l'invite.
+
+**Trouvé en cherchant pourquoi une branche restait non couverte** : les k plus
+proches renvoient *toujours* quelque chose, donc la branche « rien ne
+correspond » était morte — et une question dont les notes ne parlent pas
+revenait avec les cinq passages les moins hors-sujet, que le modèle résumait
+ensuite avec aplomb. D'où `RAG_MIN_SIMILARITY`, désactivé par défaut parce que
+le bon seuil dépend du modèle, avec les similarités affichées pour le calibrer.
+
+**Trouvé par le smoke test** : `jarvis --text` sur une entrée épuisée
+(`echo … | jarvis --text`) finissait en « Fatal error » et code 1, et un EOF
+sur une demande de confirmation faisait échouer le tour au lieu de refuser.
+Corrigés tous les deux.
+
+**Non vérifiable ici** : la qualité de rappel sur de vrais documents avec un
+vrai modèle d'embedding. Section 9 de [`TESTING.md`](TESTING.md).
+
+---
+
+## Phase 5.3 — Rappels ✅ livrée
+
+| Tâche | Détail |
+|---|---|
+| `reminders.py` | SQLite ; `pending`, `due`, annulation, plafond d'ancienneté |
+| `tools/local/schedule.py` | `remind__set`, `remind__list`, `remind__cancel` |
+| Horloge dans l'invite | rafraîchie à chaque tour — une constante serait fausse en quelques heures |
+| Livraison | entre les tours, et en interrompant l'attente du mot d'activation |
+
+**Décisions payées par un test** :
+
+- **Pas de bibliothèque d'analyse de dates.** `dateparser` existe pour
+  transformer « demain à 9 h » en horodatage, mais il y a déjà dans la boucle
+  un modèle de langue dont c'est tout le métier. L'outil reçoit donc un
+  horodatage et le **vérifie** : un rappel dans le passé ou à un an est rendu
+  au modèle pour qu'il recommence, plutôt que posé au mauvais moment.
+- **Les rappels se déclenchent entre les tours, jamais pendant.** Parler
+  par-dessus un enregistrement met la voix de Jarvis dans le micro — c'est le
+  problème pour lequel le barge-in existe et reste désactivé par défaut.
+  Quelques secondes de retard que personne ne remarque, contre un assistant
+  qui vous coupe la parole.
+- **Trois niveaux de risque différents** : poser un rappel est un `WRITE`
+  (un engagement pris en votre nom, mais annulable), lister est pré-approuvé
+  (ce sont vos propres rappels), annuler est `DESTRUCTIVE` — une promesse
+  discrètement abandonnée, et on ne s'en aperçoit qu'à l'heure où elle aurait
+  dû être tenue.
+- **Plafond d'ancienneté d'une semaine.** Se réveiller avec un mois d'arriéré
+  serait pire que de perdre le rappel ; il reste visible dans la liste.
+
+**Trouvé par une mutation** : en retirant `mark_fired`, la suite ne partait
+pas en échec mais en **boucle infinie** — la boucle repart écouter dès qu'un
+rappel est dû, donc un marquage qui échoue (base verrouillée, disque plein)
+aurait fait répéter le rappel jusqu'à l'arrêt. Corrigé par un jeu en mémoire
+des rappels déjà prononcés, avec son test.
+
+**Deux tests qui ne mesuraient rien**, repérés en mutant : l'un vérifiait le
+prédicat d'arrêt *après* l'arrêt (donc toujours vrai), l'autre plaçait un
+rappel déjà dû avant une attente qui ne commence qu'une fois les rappels
+livrés. Le cas réel — un rappel qui échoit *pendant* l'attente — est
+maintenant modélisé par un crochet dans la doublure audio.
+
+**Non vérifiable ici** : si un modèle local calcule juste « demain à 9 h ».
+Section 9 de [`TESTING.md`](TESTING.md), et c'est le vrai risque de cette
+fonctionnalité.
+
+---
+
+## Phase 5.4 — Vision ✅ livrée
+
+| Tâche | Détail |
+|---|---|
+| `vision.py` | modèle multimodal via le même `ProviderPool`, donc même repli |
+| `tools/local/images.py` | `vision__describe`, bac à sable des chemins, `precheck` |
+
+**Décisions payées par un test** :
+
+- **Un modèle séparé, pas le modèle de chat.** Le modèle qui répond peut être
+  un 70B texte sur le NAS ; rendre la vision conditionnelle à son échange
+  reviendrait à choisir entre « voit » et « réfléchit ».
+- **Une description est du contenu non fiable.** Une capture d'écran d'une
+  page web *est* une page web : le texte dans une image peut dire « ignore
+  tes instructions », et l'injection par l'image n'est pas théorique. Même
+  origine pour toutes les images, donc regarder la seconde ne réescalade pas.
+- **Le format est refusé avant lecture.** Envoyer un méga-octet de ZIP à un
+  modèle qui ne peut pas s'en servir coûte le temps et produit des absurdités
+  assurées.
+- **Le bac à sable s'applique.** Une photo est un fichier comme un autre, et
+  `~/.ssh` n'est pas plus lisible parce qu'on le demande en images.
+
+**Hors périmètre, et pourquoi** : la *capture* d'écran demande un binaire
+propre au serveur d'affichage (`grim`, `spectacle`, `scrot`…) et pose une
+question de vie privée différente de celle de lire un fichier qu'on a nommé.
+Prendre la capture soi-même et demander le fichier.
+
+**Corrigé au passage** : `test_synthesis_overlaps_playback` mesurait un temps
+mural avec 20 ms de marge — il a lâché sous charge pendant cette phase. Il
+vérifie désormais l'ordre des événements (la synthèse de la phrase suivante
+commence avant la fin de la lecture de la précédente), ce qui est la vraie
+propriété et ne dépend plus de la machine.
+
+---
+
+## Phase 5.5 — Jarvis serveur MCP ✅ livrée
+
+Le miroir de la Phase 2 : les mêmes outils, offerts à n'importe quel client.
+
+| Tâche | Détail |
+|---|---|
+| `mcp_server.py` | `on_list_tools` / `on_call_tool` sur le registre existant |
+| `jarvis-mcp` | quatrième point d'entrée, avec `--list` |
+| Règle d'autorisation | énoncée dans une fonction, `permitted()`, plutôt que disséminée |
+
+**La décision qui compte, et le faux départ qui l'a produite** : le premier
+jet s'en remettait entièrement au moteur de politique — « tout ce qui demande
+une confirmation est refusé ». Les tests ont montré que cela refusait
+*absolument tout*, y compris `fs__read` : en interactif, même une lecture est
+confirmée, parce qu'il est bon marché de dire oui une fois et de s'en
+souvenir. Le serveur aurait été inutile.
+
+La règle est donc écrite explicitement :
+
+- **Autorisé** : les lectures dans le bac à sable configuré, et ce que
+  l'utilisateur a approuvé de façon persistante dans Jarvis.
+- **Refusé** : écritures, suppressions, et tout appel fait après l'entrée de
+  contenu non fiable dans la session.
+- **Refusé ici** : la sortie réseau. Récupérer une page est en lecture seule
+  et reste une requête qui quitte la machine de quelqu'un.
+
+Plus permissif qu'une session interactive pour les lectures, plus strict pour
+le reste. Le bac à sable *est* l'autorisation d'une lecture.
+
+**Ce qui est annoncé ne contient que ce qui peut aboutir** : une boîte à
+outils pleine de choses inappelables est pire qu'une petite. Mais la liste
+n'est qu'un indice — un client qui connaît un nom peut toujours appeler et se
+faire refuser, ce qu'un test vérifie.
+
+Les tests pilotent un vrai client MCP sur le transport en mémoire du SDK,
+comme ceux du côté client : le protocole est authentique, seule la frontière
+de processus disparaît.
 
 ---
 
@@ -459,6 +670,11 @@ C'est le principal gain de l'orientation MCP : quatre fonctionnalités estimées
 | 3.5 — Fournisseurs LLM ordonnés (hors plan) | 0,5 j |
 | 4 — Qualité et packaging | 2 j |
 | **Jusqu'à l'objectif affiché** | **~16 j — livrée** |
+| 5.1 — Mot d'activation | 0,5 j |
+| 5.2 — Recherche documentaire | 1 j |
+| 5.3 — Rappels | 0,5 j |
+| 5.4 — Vision | 0,5 j |
+| 5.5 — Jarvis serveur MCP | 0,5 j |
 
 Phase 5 selon les priorités, la majeure partie étant devenue de la
 configuration.

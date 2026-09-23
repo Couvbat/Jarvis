@@ -20,6 +20,23 @@ class Settings(BaseSettings):
     # headphones, or a mic that cancels echo in hardware, turn this on.
     barge_in: bool = False
     barge_in_min_speech_ms: int = 200
+    # Hands-free activation. Off by default: it needs an optional dependency
+    # (`pip install "jarvis-assistant[wakeword]"`) and a model download, and
+    # without them Jarvis should still start and listen as it always has.
+    wake_word: bool = False
+    # A pretrained openWakeWord model name. "hey_jarvis" is one of them,
+    # which is convenient; "alexa", "hey_mycroft" and "hey_rhasspy" also
+    # exist, as does the path to a model you trained yourself.
+    wake_word_model: str = "hey_jarvis"
+    # Raise it if the room sets it off, lower it if it misses you.
+    wake_word_threshold: float = 0.5
+    # Seconds of audio kept after the phrase, so a command said in the same
+    # breath survives the handover to the recorder.
+    wake_word_tail: float = 0.5
+    # After an answer, listen this long without needing the phrase again.
+    # Saying it before every turn of an exchange is the thing people stop
+    # doing. 0 requires it every time.
+    wake_word_follow_up: float = 8.0
     sample_rate: int = 16000
     channels: int = 1
     # Which microphone to use: a name, an index, or empty for the system
@@ -97,10 +114,53 @@ class Settings(BaseSettings):
     max_fetch_bytes: int = 2_000_000
     fetch_timeout: int = 10
 
+    # Document search (RAG)
+    # Embeddings come from Ollama rather than sentence-transformers: it is
+    # already running, so this adds no Python dependency and no torch, and a
+    # self-hosted provider computes them too. `ollama pull nomic-embed-text`.
+    rag_embed_model: str = "nomic-embed-text"
+    # Characters per chunk, and how much each one repeats of the last, so an
+    # answer straddling a boundary is still found from either side.
+    rag_chunk_size: int = 1200
+    rag_chunk_overlap: int = 200
+    # Inputs per embedding request while indexing.
+    rag_batch_size: int = 16
+    # Passages returned by one search.
+    rag_top_k: int = 5
+    # Similarity below which a passage is not worth returning. Nearest-k
+    # always returns something, so without a floor a question the documents
+    # say nothing about comes back with the five least-irrelevant passages,
+    # which the model then summarises confidently. The right value depends on
+    # the embedding model - each has its own baseline for unrelated text - so
+    # the default is off. To calibrate: ask about something you know is not
+    # in your notes and look at the similarities in the answer.
+    rag_min_similarity: float = 0.0
+    # Only text is indexed; a PDF reader would be a dependency and a separate
+    # decision.
+    rag_extensions: str = ".md,.txt,.rst,.org,.markdown,.text"
+    rag_max_file_bytes: int = 2_000_000
+
     # MCP servers
     mcp_config_path: str = "mcp_servers.json"
     mcp_connect_timeout: float = 15.0
     mcp_call_timeout: float = 60.0
+
+    # Vision
+    # Off by default: it is a separate model to pull (`ollama pull llava`),
+    # and a text-only setup should not be offered a tool that cannot work.
+    vision: bool = False
+    # A multimodal model, asked alongside the chat model rather than instead
+    # of it - so a text-only 70B on the NAS keeps answering the questions.
+    vision_model: str = "llava"
+    vision_max_bytes: int = 8_000_000
+
+    # Reminders
+    # Off costs nothing but the three tools; on, reminders survive restarts
+    # and anything that came due while Jarvis was off is delivered at startup.
+    reminders: bool = True
+    # How often the voice loop looks for a reminder that has come due while it
+    # was waiting to be spoken to.
+    reminder_poll_seconds: float = 20.0
 
     # Persistent state
     data_dir: str = "~/.local/share/jarvis"
@@ -124,6 +184,21 @@ class Settings(BaseSettings):
     def conversations_path(self) -> Path:
         """Where conversation history is kept."""
         return Path(self.data_dir).expanduser() / "conversations.db"
+
+    @property
+    def documents_path(self) -> Path:
+        """Where the document index is kept."""
+        return Path(self.data_dir).expanduser() / "documents.db"
+
+    @property
+    def reminders_path(self) -> Path:
+        """Where scheduled reminders are kept."""
+        return Path(self.data_dir).expanduser() / "reminders.db"
+
+    @property
+    def rag_extensions_list(self) -> list[str]:
+        """Parse the indexable file extensions into a list."""
+        return [e.strip().lower() for e in self.rag_extensions.split(',') if e.strip()]
 
     @property
     def gui_applications_list(self) -> list[str]:

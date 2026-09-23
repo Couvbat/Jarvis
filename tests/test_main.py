@@ -19,9 +19,33 @@ class FakeAudio:
 
     def __init__(self):
         self.played = []
+        self.recordings = []      # kwargs each recording was asked for
+        self.wake_waits = []      # kwargs each wake wait was asked for
+        self.wake_stops = []      # what should_stop said during each wait
+        self.during_wait = None   # called while the wait is in progress
+        #: audio wait_for_wake reports as spoken after the phrase
+        self.wake_tail = np.zeros(0, dtype=np.int16)
 
     def record_until_silence(self, **kwargs):
+        self.recordings.append(kwargs)
         return np.zeros(16000, dtype=np.int16)
+
+    def wait_for_wake(self, detector, **kwargs):
+        self.wake_waits.append(kwargs)
+        # Whatever happens while nobody is speaking - a reminder coming due,
+        # for instance. The real wait is long; this is where a test puts what
+        # happens during it.
+        if self.during_wait is not None:
+            # Once: a hook that fires on every wait turns a loop that should
+            # settle into one that cannot.
+            hook, self.during_wait = self.during_wait, None
+            hook()
+        # The real one polls should_stop while it listens; evaluating it here
+        # is what lets a test see the condition as the loop saw it, rather
+        # than after shutdown has set the flag anyway.
+        stop = kwargs.get("should_stop")
+        self.wake_stops.append(bool(stop()) if stop else None)
+        return self.wake_tail
 
     def play_audio(self, audio, sample_rate=None):
         self.played.append((audio, sample_rate))
@@ -1060,3 +1084,383 @@ async def test_playback_uses_the_synthesiser_sample_rate(wiring):
     assert wiring["audio"].played
     assert all(rate == wiring["tts"].sample_rate
                for _, rate in wiring["audio"].played)
+
+
+class TestWakeWord:
+    """Hands-free activation, as the loop actually uses it."""
+
+    def enable(self, settings, monkeypatch, detector=None):
+        """Turn the wake word on without needing openWakeWord installed."""
+        settings.wake_word = True
+        if detector is not None:
+            monkeypatch.setattr(
+                main_module, "WakeWord", lambda **kwargs: detector
+            )
+        return settings
+
+    class Detector:
+        def describe(self):
+            return "wake word 'hey_jarvis'"
+
+    def test_it_is_off_unless_asked_for(self, wiring):
+        """It needs an optional dependency and a model download; defaulting it
+        on would break every existing install."""
+        assert Jarvis(use_tui=False).wake is None
+
+    def test_an_unavailable_detector_costs_the_feature_not_the_session(
+        self, wiring, settings, monkeypatch
+    ):
+        """Refusing to start because hands-free is unavailable would be worse
+        than listening the way Jarvis always has."""
+        def unavailable(**kwargs):
+            raise main_module.WakeWordUnavailable("openWakeWord is not installed")
+
+        settings.wake_word = True
+        monkeypatch.setattr(main_module, "WakeWord", unavailable)
+
+        instance = Jarvis(use_tui=False)
+        assert instance.wake is None
+
+    def test_the_reason_is_shown_in_the_tui(self, wiring, settings, monkeypatch):
+        def unavailable(**kwargs):
+            raise main_module.WakeWordUnavailable("models are not downloaded")
+
+        settings.wake_word = True
+        monkeypatch.setattr(main_module, "WakeWord", unavailable)
+        recording = RecordingTUI()
+        monkeypatch.setattr(main_module, "JarvisTUI", lambda: recording)
+
+        Jarvis(use_tui=True)
+        messages = [
+            str(payload) for name, payload in recording.events
+            if name == "add_system_message"
+        ]
+        assert any("not downloaded" in text for text in messages)
+
+    async def test_recording_waits_for_the_phrase(
+        self, wiring, settings, monkeypatch
+    ):
+        self.enable(settings, monkeypatch, self.Detector())
+        wiring["stt"].script = ["exit"]
+
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        await instance.run_interactive()
+
+        assert wiring["audio"].wake_waits, "recorded without waiting to be woken"
+
+    async def test_the_command_said_in_the_same_breath_is_kept(
+        self, wiring, settings, monkeypatch
+    ):
+        """"hey Jarvis quelle heure est-il" is one utterance. What follows the
+        phrase has to reach the recorder, or the user says it twice."""
+        self.enable(settings, monkeypatch, self.Detector())
+        wiring["audio"].wake_tail = np.ones(800, dtype=np.int16)
+        wiring["stt"].script = ["exit"]
+
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        await instance.run_interactive()
+
+        prefix = wiring["audio"].recordings[0]["prefix"]
+        assert prefix is not None and len(prefix) == 800
+
+    async def test_a_follow_up_does_not_need_the_phrase_again(
+        self, wiring, settings, monkeypatch
+    ):
+        """Saying it before every turn of an exchange is the thing people stop
+        doing."""
+        self.enable(settings, monkeypatch, self.Detector())
+        settings.wake_word_follow_up = 60.0
+        wiring["stt"].script = ["bonjour", "et après", "exit"]
+
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        await instance.run_interactive()
+
+        assert len(wiring["audio"].recordings) == 3
+        assert len(wiring["audio"].wake_waits) == 1
+
+    async def test_the_window_closes(self, wiring, settings, monkeypatch):
+        """Otherwise the first wake word of the session is the last, and the
+        room is live from then on."""
+        self.enable(settings, monkeypatch, self.Detector())
+        settings.wake_word_follow_up = 0.0
+        wiring["stt"].script = ["bonjour", "exit"]
+
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        await instance.run_interactive()
+
+        assert len(wiring["audio"].wake_waits) == 2
+
+    def test_an_interruption_never_needs_the_phrase(
+        self, wiring, settings, monkeypatch
+    ):
+        """Barge-in is already the user talking. Asking them to say the wake
+        word to finish their own sentence would be absurd."""
+        self.enable(settings, monkeypatch, self.Detector())
+        settings.wake_word_follow_up = 0.0
+
+        instance = Jarvis(use_tui=False)
+        assert instance._needs_wake_word() is True
+        instance._carried_audio = np.ones(100, dtype=np.int16)
+        assert instance._needs_wake_word() is False
+
+    def test_no_detector_means_no_waiting(self, wiring):
+        assert Jarvis(use_tui=False)._needs_wake_word() is False
+
+    async def test_the_listener_is_given_a_way_to_stop(
+        self, wiring, settings, monkeypatch
+    ):
+        """Waiting for the wake word happens in a thread that Ctrl-C cannot
+        reach, and the interpreter joins that thread on the way out. Without
+        this the session simply never exits - found by sending SIGINT to a
+        waiting Jarvis, not by any unit test."""
+        self.enable(settings, monkeypatch, self.Detector())
+        wiring["stt"].script = ["exit"]
+
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        await instance.run_interactive()
+
+        assert wiring["audio"].wake_waits[0]["should_stop"] is not None, (
+            "the listener was given no way to stop"
+        )
+        assert instance._shutdown.is_set(), "shutdown did not reach the listener"
+
+    async def test_shutting_down_stops_a_waiting_listener(self, wiring, settings):
+        instance = Jarvis(use_tui=False)
+        assert instance._shutdown.is_set() is False
+        await instance.aclose()
+        assert instance._shutdown.is_set() is True
+
+    async def test_the_tui_says_what_it_is_waiting_for(
+        self, wiring, settings, monkeypatch
+    ):
+        """"Listening..." while ignoring you is the worst of both."""
+        self.enable(settings, monkeypatch, self.Detector())
+        recording = RecordingTUI()
+        monkeypatch.setattr(main_module, "JarvisTUI", lambda: recording)
+        wiring["stt"].script = ["exit"]
+
+        instance = Jarvis(use_tui=True)
+        instance._tui = recording
+        instance._confirm = lambda decision: (True, False)
+        await instance.run_interactive()
+
+        assert any("hey_jarvis" in status for status in recording.statuses)
+
+
+class TestEndOfInput:
+    """`echo "..." | jarvis --text` is a reasonable way to use this."""
+
+    async def test_text_mode_ends_cleanly_when_input_runs_out(
+        self, wiring, monkeypatch, capsys
+    ):
+        """It used to end in "Fatal error" and exit code 1 instead."""
+        def exhausted(prompt=""):
+            raise EOFError
+
+        monkeypatch.setattr(builtins, "input", exhausted)
+        await Jarvis(use_tui=False).run_text_mode()
+        assert "Goodbye" in capsys.readouterr().out
+
+    def test_a_confirmation_with_nobody_there_declines(
+        self, wiring, monkeypatch, capsys
+    ):
+        """Declining is the only safe reading of silence at a confirmation
+        prompt; raising would abort the turn instead of refusing the call."""
+        def exhausted(prompt=""):
+            raise EOFError
+
+        monkeypatch.setattr(builtins, "input", exhausted)
+        assert Jarvis(use_tui=False)._confirm(make_decision()) == (False, False)
+        assert "Cancelled" in capsys.readouterr().out
+
+    def test_a_confirmation_interrupted_declines_too(self, wiring, monkeypatch):
+        def interrupted(prompt=""):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(builtins, "input", interrupted)
+        assert Jarvis(use_tui=False)._confirm(make_decision()) == (False, False)
+
+
+class TestReminderDelivery:
+    """Delivery is between turns on purpose: speaking over a recording puts
+    Jarvis's own voice into the microphone."""
+
+    def store(self, instance):
+        return instance.reminders
+
+    def soon(self, minutes=30):
+        from datetime import datetime, timedelta, timezone
+
+        return datetime.now(timezone.utc) + timedelta(minutes=minutes)
+
+    def ago(self, minutes=30):
+        from datetime import datetime, timedelta, timezone
+
+        return datetime.now(timezone.utc) - timedelta(minutes=minutes)
+
+    async def test_a_due_reminder_is_spoken(self, wiring, settings):
+        wiring["stt"].script = ["exit"]
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        instance.reminders.add("call the plumber", self.ago(1))
+
+        await instance.run_interactive()
+        assert any("call the plumber" in said for said in wiring["tts"].spoken)
+
+    async def test_it_only_fires_once(self, wiring, settings):
+        """Otherwise every turn for the rest of the session repeats it."""
+        wiring["stt"].script = ["bonjour", "exit"]
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        instance.reminders.add("call the plumber", self.ago(1))
+
+        await instance.run_interactive()
+        spoken = [s for s in wiring["tts"].spoken if "call the plumber" in s]
+        assert len(spoken) == 1
+        assert instance.reminders.pending() == []
+
+    async def test_one_that_is_not_due_stays_quiet(self, wiring, settings):
+        wiring["stt"].script = ["exit"]
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        instance.reminders.add("later", self.soon(120))
+
+        await instance.run_interactive()
+        assert not any("later" in said for said in wiring["tts"].spoken)
+        assert len(instance.reminders.pending()) == 1
+
+    async def test_a_late_one_says_it_is_late(self, wiring, settings):
+        """A reminder that arrives late without saying so arrives wrong."""
+        wiring["stt"].script = ["exit"]
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        instance.reminders.add("the meeting", self.ago(120))
+
+        await instance.run_interactive()
+        assert any("While you were away" in said for said in wiring["tts"].spoken)
+
+    async def test_a_just_due_one_is_not_called_late(self, wiring, settings):
+        wiring["stt"].script = ["exit"]
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        instance.reminders.add("right now", self.ago(1))
+
+        await instance.run_interactive()
+        said = [s for s in wiring["tts"].spoken if "right now" in s][0]
+        assert "While you were away" not in said
+
+    async def test_text_mode_delivers_them_too(
+        self, wiring, settings, monkeypatch, capsys
+    ):
+        answers = iter(["exit"])
+        monkeypatch.setattr(builtins, "input", lambda *a, **k: next(answers))
+
+        instance = Jarvis(use_tui=False)
+        instance.reminders.add("call the plumber", self.ago(1))
+        await instance.run_text_mode()
+
+        assert "call the plumber" in capsys.readouterr().out
+
+    def test_startup_says_what_is_waiting(self, wiring, settings, caplog):
+        instance = Jarvis(use_tui=False)
+        instance.reminders.add("dentist", self.soon(60))
+        instance._report_reminders()
+        # Reported through the logger, which the TUI mirrors; the assertion
+        # that matters is that it did not raise and the reminder is there.
+        assert len(instance.reminders.pending()) == 1
+
+    def test_startup_is_quiet_with_nothing_scheduled(
+        self, wiring, settings, monkeypatch
+    ):
+        recording = RecordingTUI()
+        monkeypatch.setattr(main_module, "JarvisTUI", lambda: recording)
+        instance = Jarvis(use_tui=True)
+        instance._tui = recording
+        recording.events.clear()
+
+        instance._report_reminders()
+        assert not any(name == "add_system_message" for name, _ in recording.events)
+
+    def test_startup_names_the_next_one_in_the_tui(
+        self, wiring, settings, monkeypatch
+    ):
+        recording = RecordingTUI()
+        monkeypatch.setattr(main_module, "JarvisTUI", lambda: recording)
+        instance = Jarvis(use_tui=True)
+        instance._tui = recording
+        instance.reminders.add("dentist", self.soon(60))
+
+        instance._report_reminders()
+        messages = [
+            str(payload) for name, payload in recording.events
+            if name == "add_system_message"
+        ]
+        assert any("dentist" in text for text in messages)
+
+    def test_turning_them_off_costs_nothing_else(self, wiring, settings):
+        settings.reminders = False
+        instance = Jarvis(use_tui=False)
+        assert instance.reminders is None
+        assert instance._reminder_is_due() is False
+        instance._report_reminders()
+
+    async def test_delivery_is_a_no_op_when_off(self, wiring, settings):
+        settings.reminders = False
+        instance = Jarvis(use_tui=False)
+        assert await instance._deliver_due_reminders() == 0
+
+    async def test_a_reminder_ends_the_wait_for_the_wake_word(
+        self, wiring, settings, monkeypatch
+    ):
+        """A hands-free session nobody speaks to would otherwise never
+        deliver one."""
+        class Detector:
+            def describe(self):
+                return "wake word 'hey_jarvis'"
+
+        settings.wake_word = True
+        settings.wake_word_follow_up = 0.0
+        monkeypatch.setattr(main_module, "WakeWord", lambda **kwargs: Detector())
+        wiring["stt"].script = ["exit"]
+
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+
+        # Nothing is due when the wait starts - one already due is delivered
+        # before it. The case that needs the stop predicate is a reminder that
+        # comes due while nobody is speaking.
+        wiring["audio"].during_wait = lambda: instance.reminders.add(
+            "call the plumber", self.ago(1)
+        )
+        wiring["audio"].wake_tail = np.zeros(0, dtype=np.int16)
+        await instance.run_interactive()
+
+        # Asked during the wait, before shutdown sets its own flag: the
+        # reminder alone has to be enough to stop listening.
+        assert wiring["audio"].wake_stops[0] is True
+        assert any("call the plumber" in said for said in wiring["tts"].spoken)
+
+    async def test_a_store_that_will_not_record_does_not_repeat_forever(
+        self, wiring, settings, monkeypatch
+    ):
+        """The loop goes back to listening the moment one is due, so a failed
+        write would otherwise have Jarvis saying it until it is stopped."""
+        wiring["stt"].script = ["bonjour", "encore", "exit"]
+        instance = Jarvis(use_tui=False)
+        instance._confirm = lambda decision: (True, False)
+        instance.reminders.add("call the plumber", self.ago(1))
+
+        def refuse(reminder_id):
+            raise OSError("database is locked")
+
+        monkeypatch.setattr(instance.reminders, "mark_fired", refuse)
+        await instance.run_interactive()
+
+        spoken = [s for s in wiring["tts"].spoken if "call the plumber" in s]
+        assert len(spoken) == 1
+        assert instance._reminder_is_due() is False

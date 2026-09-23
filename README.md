@@ -8,12 +8,16 @@ A privacy-focused, local-first voice assistant for Linux that runs entirely on y
 - 🎤 **Speech-to-Text**: Uses OpenAI Whisper (via faster-whisper) for accurate voice recognition
 - 🔊 **Text-to-Speech**: Uses Piper TTS for natural voice synthesis
 - 🎯 **Voice Activity Detection**: Intelligent listening with automatic silence detection
+- 👋 **Wake word** (optional): hands-free activation on "hey Jarvis", locally, with no API key
 - 🛠️ **System Operations**: 
   - File management (create, read, delete files and directories)
   - Web page fetching and information retrieval
   - Application launching
 - 🔒 **Security**: Sandboxed execution with whitelisted commands and directory restrictions
 - 💬 **Conversation Memory**: Maintains context across multiple interactions
+- 📚 **Document search** (optional): ask questions about your own notes and files, indexed locally
+- ⏰ **Reminders**: "remind me to call the plumber tomorrow at nine", kept across restarts
+- 👁️ **Vision** (optional): ask what is in a screenshot or a photo on your disk
 
 ## Architecture
 
@@ -217,6 +221,148 @@ Edit [.env](.env) to customize:
   thousand tokens whatever the model's native size, and the tool schemas are
   re-sent every turn.
 
+### Looking at images
+
+```bash
+ollama pull llava
+# .env
+VISION=true
+```
+
+*"What's in ~/Downloads/screenshot.png?"* — the image is read from disk and
+put to a multimodal model, and the answer comes back as a tool result.
+
+It is a **separate model from the one answering your questions**. Making
+vision conditional on swapping the chat model would mean choosing between
+"can see" and "can think": a text-only 70B on the NAS stays where it is, and
+the picture goes to `llava` wherever that is pulled.
+
+The same path sandbox applies — a photo is a file like any other, and
+`~/.ssh` is no more readable for being asked about in pictures. Descriptions
+count as **untrusted content**, because a screenshot of a web page is a web
+page: text in an image can say "ignore your previous instructions", and
+visual prompt injection is not hypothetical.
+
+Screenshot *capture* is not included: it needs a display-server-specific
+binary (`grim`, `spectacle`, `scrot`…) and it is a different privacy
+question from reading a file you named. Take the screenshot yourself and ask
+about the file.
+
+### Reminders
+
+*"Remind me to call the plumber tomorrow at nine."* *"What have I got
+scheduled?"* *"Cancel the second one."*
+
+Reminders are stored on disk, so they survive a restart, and one that came
+due while Jarvis was off is delivered the next time it starts — prefixed
+"while you were away", because a reminder that arrives late without saying so
+arrives wrong.
+
+Two things worth knowing:
+
+- **No date-parsing library.** `dateparser` exists to turn "demain à 9h" into
+  a timestamp, but there is already a language model in the loop whose whole
+  job is understanding what was said. The current time goes into its
+  instructions, it hands over a timestamp, and the tool *checks* it: a
+  reminder in the past, or a year out, is handed back so the model can try
+  again rather than setting the wrong time. If your model keeps getting the
+  arithmetic wrong, "in 30 minutes" takes a different path that is much
+  harder to get wrong.
+- **They fire between turns, never during one.** Speaking over a recording
+  would put Jarvis's own voice into the microphone — the problem barge-in
+  exists for. So a reminder interrupts the wait for the wake word, or arrives
+  when the current answer finishes. A few seconds late; never talking over
+  you.
+
+Set `REMINDERS=false` to drop the three tools entirely.
+
+### Searching your own documents
+
+Index your notes once, and Jarvis can answer from them instead of guessing:
+
+```bash
+ollama pull nomic-embed-text
+jarvis-index ~/Documents          # or a single file, or several paths
+jarvis-index --status             # what is indexed, and with which model
+```
+
+Then: *"what did I write about the boiler?"*, *"what's the plumber's
+number?"*, *"summarise my notes from the meeting on Tuesday"*. Answers name
+the files they came from, so you can check them.
+
+Re-run `jarvis-index` whenever your notes change — it only re-reads files
+whose size or timestamp moved, and drops files you deleted. `--force`
+re-embeds everything.
+
+Design notes worth knowing:
+
+- **Embeddings come from Ollama**, not `sentence-transformers`. That would
+  mean torch: a multi-gigabyte install, on a machine already running a
+  language model and a speech recogniser, to do something the model server
+  does natively. This adds no Python dependency at all, and your self-hosted
+  provider computes the embeddings when it is the one answering.
+- **The search is a tool the model calls**, not context stuffed into every
+  turn. "What time is it" should not drag your notes into the prompt.
+- **The path sandbox applies.** `jarvis-index ~/.ssh` is refused, and so is
+  any file matching `DENIED_PATTERNS` inside a directory you did allow —
+  indexing a file puts its contents one similarity match away from the
+  prompt.
+- **Retrieved passages count as untrusted**, which `fs__read` does not. With
+  `fs__read` you named the file; here a similarity score chose it, and your
+  index may hold a README from a cloned repo or a downloaded document that
+  says "ignore your instructions". So a write *after* a document search is
+  confirmed at the keyboard. Searching again is not re-escalated — that is
+  what the origin rule is for.
+- **Text only.** PDFs would mean another dependency and a separate decision;
+  `RAG_EXTENSIONS` says what is indexed.
+
+If a question your notes say nothing about comes back with vaguely related
+passages, set `RAG_MIN_SIMILARITY`. Nearest-k always returns *something*, so
+a floor is the only thing that turns "here are five irrelevant passages" into
+"nothing matched". The right value depends on the embedding model, so it is
+off by default; the similarity of each passage is printed in the answer,
+which is how you find yours.
+
+### Hands-free activation
+
+Without a wake word Jarvis records, transcribes and answers everything it
+hears. That is fine for a session you started deliberately and wrong for
+something that sits on a desk all day.
+
+```bash
+pip install "jarvis-assistant[wakeword]"
+python -c "import openwakeword.utils; openwakeword.utils.download_models()"
+```
+
+Then in `.env`:
+
+```bash
+WAKE_WORD=true
+WAKE_WORD_MODEL=hey_jarvis     # also: alexa, hey_mycroft, hey_rhasspy
+WAKE_WORD_THRESHOLD=0.5        # up if the room sets it off, down if it misses you
+WAKE_WORD_FOLLOW_UP=8          # seconds a follow-up needs no wake word
+```
+
+The detector is [openWakeWord](https://github.com/dscripka/openWakeWord),
+which runs locally and happens to ship a pretrained `hey_jarvis` model.
+Porcupine, the usual suggestion, needs a Picovoice API key — a key check
+against a remote service is exactly what "fully local" rules out, however
+good the detector is.
+
+Two things it does that a naive version does not:
+
+- **The command in the same breath survives.** People say "hey Jarvis quelle
+  heure est-il", not "hey Jarvis", pause, "quelle heure est-il". The audio
+  after the phrase is carried into the recording (`WAKE_WORD_TAIL`).
+- **A follow-up does not need the phrase again.** For `WAKE_WORD_FOLLOW_UP`
+  seconds after an answer, Jarvis just listens. Saying the wake word before
+  every turn is the thing people stop doing. Set it to `0` to require it
+  every time.
+
+If the package or the models are missing, Jarvis says so once and listens the
+way it always has, rather than refusing to start. Needs `SAMPLE_RATE=16000`,
+which is the default — the models mean nothing at any other rate.
+
 ### Remote and fallback providers
 
 A self-hosted Ollama on the LAN and a small model on this machine are not the
@@ -281,8 +427,12 @@ Jarvis/
 │   ├── tui.py                  #   Rich terminal interface
 │   ├── text_utils.py           #   shared normalisation and tokenisation
 │   ├── conversation_store.py   #   conversation history (SQLite)
+│   ├── reminders.py            #   scheduled reminders (SQLite)
+│   ├── vision.py               #   multimodal model for images
+│   ├── mcp_server.py           #   Jarvis's own tools, served over MCP
 │   ├── setup_piper.py          #   Piper installer (`jarvis-setup-piper`)
-│   ├── speech/                 #   sentence chunking, TTS queue, barge-in
+│   ├── speech/                 #   sentence chunking, TTS queue, barge-in, wake word
+│   ├── rag/                    #   document index: chunking, embeddings, search
 │   ├── tools/                  # Tool layer
 │   │   ├── schema.py           #   tool specs, risk levels, MCP conversion
 │   │   ├── registry.py         #   registration and dispatch
@@ -336,6 +486,47 @@ python -c "from faster_whisper import WhisperModel; model = WhisperModel('base')
 **Out of memory:**
 - Use a smaller model (`tiny` or `base`)
 - Set `WHISPER_COMPUTE_TYPE=int8`
+
+### Reminder Issues
+
+**It sets the wrong time:** small models are worse at date arithmetic than at
+language. Ask for "in 30 minutes" rather than "at half past" and see whether
+that is reliable; the two go down different paths. A time in the past or more
+than a year out is refused and handed back, so watch for the model retrying.
+
+**A reminder never arrived:** Jarvis has to be running. They fire between
+turns, so one due mid-answer waits for the answer to finish. Anything older
+than a week is not delivered at all — waking up to a backlog would be worse —
+but it stays visible in the list until cancelled.
+
+### Document Search Issues
+
+**"no documents are indexed yet":** run `jarvis-index ~/Documents`.
+
+**"could not embed":** `ollama pull nomic-embed-text`. Pointing
+`RAG_EMBED_MODEL` at a chat model instead of an embedding model is caught and
+reported rather than indexed as garbage.
+
+**"this index was built with X":** you changed `RAG_EMBED_MODEL`. Vectors from
+two models are not comparable, so this is refused rather than averaged over —
+re-index, or set it back.
+
+**Answers cite the wrong passages:** raise `RAG_MIN_SIMILARITY` (see above),
+or lower `RAG_CHUNK_SIZE` so each passage is about one thing.
+
+### Wake Word Issues
+
+**It never hears me:** lower `WAKE_WORD_THRESHOLD`, and check the microphone
+is the one you think it is (`AUDIO_INPUT_DEVICE`). `hey_jarvis` is trained on
+English pronunciation; a strong accent may need a lower threshold or a model
+you train yourself.
+
+**It goes off on its own:** raise the threshold. Check the follow-up window
+too — inside it Jarvis is listening on purpose.
+
+**"Wake word disabled" at startup:** the message says which of the two steps
+is missing, installing the package or downloading the models. Jarvis carries
+on listening without it.
 
 ### Ollama Issues
 
@@ -489,6 +680,43 @@ against the installed package; from a bare checkout it falls back to `src/`.
 For the checks the suite cannot make - real transcription quality, a physical
 microphone, measured latency, a remote Ollama, third-party MCP servers - see
 [TESTING.md](TESTING.md).
+
+### Jarvis as an MCP server
+
+The mirror of the above: Jarvis's own tools, offered to any MCP client, so a
+self-hosted setup has **one** place where "which directories may be touched"
+is decided rather than one per client.
+
+```jsonc
+// in your MCP client's configuration
+{
+  "mcpServers": {
+    "jarvis": { "command": "jarvis-mcp" }
+  }
+}
+```
+
+`jarvis-mcp --list` shows what would be offered. Today that is the read-only
+filesystem tools, document search once you have an index, and the reminder
+list.
+
+The interesting part is what it *refuses*, and why. Interactively a person
+answers the confirmations; here the caller is a program and there is nobody
+to ask. Deferring to the policy engine unchanged would refuse everything —
+even a plain read is confirmed in a spoken session — and auto-approving would
+throw away the only thing between a model and your disk. So the rule is
+stated explicitly:
+
+| | |
+|---|---|
+| **Allowed** | reads inside `ALLOWED_DIRECTORIES`, and anything you approved out of band in Jarvis itself |
+| **Refused** | writes, deletions, and every call made after untrusted content entered the session |
+| **Refused here** | egress — fetching a page is read-only and still a request leaving your machine |
+
+Looser than an interactive session for reads, stricter for everything else.
+The sandbox *is* the authorisation for a read: it is the setting whose whole
+job is saying which files a program may see. Refusals come back with their
+reason, so the client can tell you what to run in Jarvis directly.
 
 ### Connecting MCP servers
 
