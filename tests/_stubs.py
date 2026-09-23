@@ -14,7 +14,7 @@ these tests exist to catch.
 
 import sys
 import types
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -304,11 +304,47 @@ class _AsyncStream:
         )
 
 
+class StreamThenFail:
+    """A scripted response that streams part of an answer and then breaks.
+
+    A server that dies mid-generation is not the same failure as one that was
+    never there: some of the answer has already been spoken, and that cannot
+    be taken back by trying another provider.
+    """
+
+    def __init__(self, content: str, error: Exception):
+        self.content = content
+        self.error = error
+
+
+class _FailingStream:
+    """Yields ``response.content`` in slices, then raises."""
+
+    def __init__(self, failure: StreamThenFail, slice_size: int = 7):
+        self.failure = failure
+        self.slice_size = slice_size
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        content = self.failure.content
+        for start in range(0, len(content), self.slice_size):
+            yield SubscriptableModel(
+                message=SubscriptableModel(
+                    content=content[start:start + self.slice_size], tool_calls=[]
+                )
+            )
+        raise self.failure.error
+
+
 class _AsyncClient:
     """Stand-in for ``ollama.AsyncClient``.
 
     Records the host it was built with, so a test can check that the
-    configured OLLAMA_HOST actually reaches the client.
+    configured OLLAMA_HOST actually reaches the client.  Behaviour can be
+    scripted per host, because a pool of providers is only interesting when
+    one of them answers and another does not.
     """
 
     def __init__(self, host: Optional[str] = None, **kwargs: Any):
@@ -316,17 +352,32 @@ class _AsyncClient:
         _OLLAMA_MODULE["instance"].hosts.append(host)
 
     async def chat(self, **kwargs: Any) -> Any:
-        response = _OLLAMA_MODULE["instance"].chat(**kwargs)
+        module = _OLLAMA_MODULE["instance"]
+        module.chat_hosts.append(self.host)
+
+        error = module.host_chat_errors.get(self.host)
+        if error is not None:
+            raise error
+
+        response = module.chat(**kwargs)
+        if isinstance(response, StreamThenFail):
+            return _FailingStream(response)
         if kwargs.get("stream"):
             return _AsyncStream(response)
         return response
 
     async def list(self) -> Any:
         module = _OLLAMA_MODULE["instance"]
-        if module.list_error is not None:
-            raise module.list_error
+        module.list_hosts.append(self.host)
+
+        error = module.host_list_errors.get(self.host, module.list_error)
+        if error is not None:
+            raise error
         return SubscriptableModel(
-            models=[SubscriptableModel(model=name) for name in module.models]
+            models=[
+                SubscriptableModel(model=name)
+                for name in module.host_models.get(self.host, module.models)
+            ]
         )
 
 
@@ -343,7 +394,15 @@ class _OllamaModule(types.ModuleType):
         self.error: Optional[Exception] = None
         self.list_error: Optional[Exception] = None
         self.models: List[str] = ["llama3.1:8b"]
+        #: hosts a chat / list call was made against, in order
+        self.chat_hosts: List[Optional[str]] = []
+        self.list_hosts: List[Optional[str]] = []
+        #: per-host overrides, for pools where one provider is down
+        self.host_models: Dict[Optional[str], List[str]] = {}
+        self.host_list_errors: Dict[Optional[str], Exception] = {}
+        self.host_chat_errors: Dict[Optional[str], Exception] = {}
         self.AsyncClient = _AsyncClient
+        self.StreamThenFail = StreamThenFail
         _OLLAMA_MODULE["instance"] = self
 
     def chat(self, **kwargs: Any) -> Any:
@@ -367,6 +426,11 @@ class _OllamaModule(types.ModuleType):
         self.calls.clear()
         self.responses.clear()
         self.hosts.clear()
+        self.chat_hosts.clear()
+        self.list_hosts.clear()
+        self.host_models.clear()
+        self.host_list_errors.clear()
+        self.host_chat_errors.clear()
         self.error = None
         self.list_error = None
         self.models = ["llama3.1:8b"]

@@ -69,6 +69,13 @@ def isolated_state(tmp_path_factory, monkeypatch):
     directory = tmp_path_factory.mktemp("jarvis-state")
     monkeypatch.setenv("DATA_DIR", str(directory))
     monkeypatch.setattr(_settings, "data_dir", str(directory), raising=False)
+    # A developer's own llm_providers.json sits in the repo root, which is the
+    # working directory here; point the default somewhere that does not exist
+    # so provider tests see the settings, not that file.
+    monkeypatch.setattr(
+        _settings, "llm_providers_path", str(directory / "llm_providers.json"),
+        raising=False,
+    )
     return directory
 
 

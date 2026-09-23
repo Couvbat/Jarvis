@@ -1,18 +1,13 @@
 """LLM module with Ollama integration and function calling."""
 
-import asyncio
 from collections.abc import Mapping
-from typing import Any, Callable, Dict, List, Optional
-import ollama
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from loguru import logger
 from config import settings
 from conversation_store import ConversationStore
+from llm_providers import ProviderConfig, ProviderPool
 from tools.registry import ToolRegistry
 from tools.selection import ToolSelector, estimate_schema_tokens
-
-
-#: Seconds to wait when asking the server whether it is there.
-HEALTH_TIMEOUT = 5.0
 
 
 def to_plain(value: Any) -> Any:
@@ -168,6 +163,7 @@ speak English."""
         registry: Optional[ToolRegistry] = None,
         selector: Optional[ToolSelector] = None,
         store: Optional[ConversationStore] = None,
+        providers: Optional[ProviderPool] = None,
     ):
         self.registry = registry
         self.store = store
@@ -177,12 +173,11 @@ speak English."""
             top_k=settings.tool_selection_top_k,
         )
         self._last_utterance = ""
-        self.host = settings.ollama_host
-        # An explicit client, so OLLAMA_HOST from .env is actually honoured.
-        # The module-level ollama.chat() uses a default client that only reads
-        # the process environment, so the setting was silently ignored.
-        self.client = ollama.AsyncClient(host=self.host)
-        self.model = settings.ollama_model
+        # Explicit clients, one per provider, so OLLAMA_HOST from .env is
+        # actually honoured. The module-level ollama.chat() uses a default
+        # client that only reads the process environment, so the setting was
+        # silently ignored.
+        self.providers = providers if providers is not None else ProviderPool()
         self.temperature = settings.llm_temperature
         self.max_tokens = settings.llm_max_tokens
         if self.store is not None:
@@ -192,6 +187,22 @@ speak English."""
             settings.max_conversation_history, on_turn=self._record
         )
         self.history.set_system(self.SYSTEM_PROMPT)
+
+    @property
+    def provider(self) -> Optional[ProviderConfig]:
+        """The provider serving this session, or the preferred one before any
+        probe has run."""
+        return self.providers.active or self.providers.preferred
+
+    @property
+    def host(self) -> str:
+        provider = self.provider
+        return provider.host if provider is not None else ""
+
+    @property
+    def model(self) -> str:
+        provider = self.provider
+        return provider.model if provider is not None else ""
 
     def _record(self, message: Dict[str, Any]) -> None:
         """Write a turn to the conversation log, if one is being kept."""
@@ -217,40 +228,34 @@ speak English."""
         logger.info(f"Resumed {restored} turn(s) from conversation {source}")
         return restored
 
-    async def is_available(self) -> bool:
-        """Whether the Ollama server answers.
+    async def status(self) -> Tuple[Optional[ProviderConfig], Dict[str, str]]:
+        """Which provider will serve this session, and what each one reported.
 
-        Without this a stopped server only shows up as a spoken apology once
-        per turn, which tells the user nothing about what to fix.
+        Called once at startup: a stopped server otherwise shows up only as a
+        spoken apology per turn, which tells the user nothing about what to fix.
         """
-        try:
-            await asyncio.wait_for(self.client.list(), timeout=HEALTH_TIMEOUT)
-            return True
-        except Exception as e:
-            logger.warning(f"Ollama at {self.host} is not answering: {e}")
-            return False
+        provider = await self.providers.refresh(force=True)
+        return provider, self.providers.describe()
+
+    async def is_available(self) -> bool:
+        """Whether any provider answers at all."""
+        await self.providers.refresh(force=True)
+        return any(state.reachable for state in self.providers.state.values())
 
     async def has_model(self) -> Optional[bool]:
-        """Whether the configured model is pulled. None if that cannot be told."""
-        try:
-            listing = await asyncio.wait_for(self.client.list(), timeout=HEALTH_TIMEOUT)
-        except Exception:
-            return None
+        """Whether a reachable provider has its model.
 
-        models = listing.get("models") if hasattr(listing, "get") else None
-        if not models:
-            return None
-
-        wanted = self.model.split(":")[0]
-        for entry in models:
-            name = str(
-                (entry.get("model") if hasattr(entry, "get") else None)
-                or (entry.get("name") if hasattr(entry, "get") else None)
-                or ""
-            )
-            if name == self.model or name.split(":")[0] == wanted:
-                return True
-        return False
+        False means a server is up but no configured model is pulled on it -
+        the one case worth naming a fix for. None means nothing could be told,
+        because nothing answered.
+        """
+        await self.providers.refresh(force=True)
+        states = self.providers.state.values()
+        if any(state.usable for state in states):
+            return True
+        if any(state.reachable for state in states):
+            return False
+        return None
 
     def close(self) -> None:
         """Mark the conversation finished."""
@@ -301,39 +306,29 @@ speak English."""
         rest is still being generated. That is the difference between an
         assistant and a batch job: total time barely moves, but the wait
         before the first sound roughly halves.
+
+        Providers are tried in order until one answers. Once a fragment has
+        been handed to ``on_text`` the turn is committed to that provider:
+        the user has already heard the start of the answer, and saying it
+        again in another model's words would be worse than stopping.
         """
-        try:
-            stream = await self.client.chat(
-                model=self.model,
-                messages=self.history.get_messages(),
-                tools=self.available_tools(),
-                stream=True,
-                options={
-                    "temperature": self.temperature,
-                    "num_predict": self.max_tokens,
-                    "num_ctx": settings.llm_num_ctx,
-                }
-            )
+        last_error: Optional[Exception] = None
+        spoken = ""
 
+        for provider in await self.providers.candidates():
             parts: List[str] = []
-            tool_calls: List[Any] = []
+            try:
+                tool_calls = await self._stream_turn(provider, on_text, parts)
+            except Exception as e:
+                logger.error(f"LLM error from {provider.describe()}: {e}")
+                self.providers.report_failure(provider, e)
+                last_error = e
+                if parts:
+                    spoken = "".join(parts)
+                    break
+                continue
 
-            async for chunk in stream:
-                message = chunk.get("message", {}) or {}
-
-                fragment = message.get("content") or ""
-                if fragment:
-                    parts.append(fragment)
-                    if on_text is not None:
-                        # Prose that arrives alongside a tool call is spoken
-                        # too: "I'll look that up" while the tool runs is the
-                        # right thing to say, not a leak.
-                        on_text(fragment)
-
-                calls = message.get("tool_calls")
-                if calls:
-                    tool_calls.extend(to_plain(calls))
-
+            self.providers.report_success(provider)
             content = "".join(parts)
             self.history.add_assistant(content, tool_calls)
 
@@ -341,26 +336,80 @@ speak English."""
             if tool_calls:
                 logger.info(f"Tool calls: {len(tool_calls)}")
 
-            return {
-                "response": content,
-                "tool_calls": tool_calls or None
+            return {"response": content, "tool_calls": tool_calls or None}
+
+        return self._generation_failed(spoken, last_error, on_text)
+
+    async def _stream_turn(
+        self,
+        provider: ProviderConfig,
+        on_text: Optional[Callable[[str], None]],
+        parts: List[str],
+    ) -> List[Any]:
+        """Stream one turn from one provider, collecting text into ``parts``.
+
+        ``parts`` is filled as the answer arrives rather than returned, so a
+        caller that catches a mid-stream failure can still see how much of the
+        answer the user already heard.
+        """
+        stream = await self.providers.client_for(provider).chat(
+            model=provider.model,
+            messages=self.history.get_messages(),
+            tools=self.available_tools(provider),
+            stream=True,
+            options={
+                "temperature": self.temperature,
+                "num_predict": self.max_tokens,
+                "num_ctx": provider.num_ctx or settings.llm_num_ctx,
             }
+        )
 
-        except Exception as e:
-            logger.error(f"LLM error: {e}")
-            error_response = "I'm sorry, I encountered an error processing your request."
-            self.history.add_assistant(error_response)
-            if on_text is not None:
-                # Down the same channel as any other text, so the caller has
-                # no special case and the user actually hears about it.
-                on_text(error_response)
-            return {"response": error_response, "tool_calls": None}
+        tool_calls: List[Any] = []
+        async for chunk in stream:
+            message = chunk.get("message", {}) or {}
 
-    def available_tools(self) -> List[Dict[str, Any]]:
+            fragment = message.get("content") or ""
+            if fragment:
+                parts.append(fragment)
+                if on_text is not None:
+                    # Prose that arrives alongside a tool call is spoken too:
+                    # "I'll look that up" while the tool runs is the right
+                    # thing to say, not a leak.
+                    on_text(fragment)
+
+            calls = message.get("tool_calls")
+            if calls:
+                tool_calls.extend(to_plain(calls))
+
+        return tool_calls
+
+    def _generation_failed(
+        self,
+        spoken: str,
+        error: Optional[Exception],
+        on_text: Optional[Callable[[str], None]],
+    ) -> Dict[str, Any]:
+        """Apologise once, in the same channel as any other text."""
+        logger.error(f"No LLM provider could answer: {error}")
+        apology = "I'm sorry, I encountered an error processing your request."
+        if on_text is not None:
+            # Down the same channel as any other text, so the caller has no
+            # special case and the user actually hears about it.
+            on_text(apology)
+        # Whatever was already spoken stays in the history with the apology
+        # attached, so the record matches what the user heard.
+        self.history.add_assistant(f"{spoken} {apology}".strip())
+        return {"response": apology, "tool_calls": None}
+
+    def available_tools(
+        self, provider: Optional[ProviderConfig] = None
+    ) -> List[Dict[str, Any]]:
         """Function schemas to offer the model this turn.
 
         Narrowed to the tools relevant to the utterance once there are enough
-        of them to matter; a small model picks badly past a dozen or so.
+        of them to matter; a small model picks badly past a dozen or so. A
+        provider may narrow it further: the point of falling back to a 3B
+        model is to keep working, not to keep the same toolbox.
         """
         if self.registry is None:
             return []
@@ -368,13 +417,24 @@ speak English."""
         names = self.selector.select(
             self.registry, self._last_utterance, self._recent_context()
         )
+        max_tools = provider.max_tools if provider is not None else None
+        if max_tools:
+            # select() returns None for "offer everything"; a cap has to work
+            # in that case too, and the selector already ordered by relevance.
+            if names is None:
+                names = [spec.name for spec in self.registry.specs()]
+            names = names[:max_tools]
+
         schemas = self.registry.describe(names)
 
+        num_ctx = settings.llm_num_ctx
+        if provider is not None and provider.num_ctx:
+            num_ctx = provider.num_ctx
         cost = estimate_schema_tokens(schemas)
-        if cost > settings.llm_num_ctx // 2:
+        if cost > num_ctx // 2:
             logger.warning(
                 f"Tool schemas are about {cost} tokens against a context of "
-                f"{settings.llm_num_ctx}; raise LLM_NUM_CTX or lower "
+                f"{num_ctx}; raise LLM_NUM_CTX or lower "
                 f"TOOL_SELECTION_TOP_K, or the conversation will be truncated"
             )
         return schemas

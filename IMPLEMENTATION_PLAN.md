@@ -331,6 +331,43 @@ tous couverts par un test `xfail`.
 
 ---
 
+## Phase 3.5 — Fournisseurs LLM ordonnés ✅ livrée (hors plan)
+
+Demandée en cours de route : un Ollama auto-hébergé sur le NAS, avec repli sur
+un petit modèle local quand il n'est pas joignable. 1022 tests passants, 100 %
+de couverture sur `llm_providers.py` et `llm_module.py`.
+
+| Tâche | Détail |
+|---|---|
+| `llm_providers.py` | liste ordonnée, sondage (`list`) avec délai, table de santé par fournisseur |
+| Bascule dans `LLMModule` | les fournisseurs sont essayés dans l'ordre pour chaque tour ; `_stream_turn` remplit `parts` au fil de l'eau pour que l'appelant sache ce qui a déjà été prononcé |
+| Retour au préféré | nouveau sondage au bout de `LLM_PROVIDER_RECHECK_SECONDS` tant qu'on est sur un repli |
+| Boîte à outils réduite | `max_tools` par fournisseur : un 3B choisit mal dans la liste d'un 32B |
+| Rapport au démarrage | `main.py` annonce le fournisseur qui répond *et* l'état des autres |
+| Configuration | `.env` pour le cas à deux ; `llm_providers.json` au-delà |
+
+**Décisions prises et payées par un test** :
+
+- **On ne bascule que sur l'injoignable ou le modèle absent.** Une réponse qui
+  semble mauvaise n'est pas une condition de bascule.
+- **Une fois un fragment prononcé, le tour est engagé** sur ce fournisseur :
+  redire la même phrase avec les mots d'un autre modèle serait pire que de
+  s'excuser. Ce qui a été prononcé reste dans l'historique, avec l'excuse
+  attachée, pour que la trace corresponde à ce que l'utilisateur a entendu.
+- **Une liste de modèles vide n'est pas une preuve d'absence** : on tente le
+  fournisseur plutôt que de basculer pour rien.
+- **L'annonce de bascule est dissociée de `active`.** Premier jet : `refresh()`
+  comparait avec `self.active`, que `report_failure()` venait justement
+  d'effacer — le seul message qui compte, « le modèle a changé », était
+  précisément celui qui ne s'affichait jamais. Trouvé en cherchant pourquoi
+  une ligne restait non couverte.
+
+**Trouvé par le smoke test, pas par les tests unitaires** : rien. Le scénario
+complet (NAS absent au démarrage, retour du NAS entre deux tours) passe du
+premier coup à travers le vrai `main.py --text`.
+
+---
+
 ## Phase 4 — Qualité et packaging (≈ 2 jours)
 
 - **Nettoyage lint** en un commit isolé : `ruff check --fix .` puis
@@ -405,6 +442,18 @@ ruff check .
 ```
 
 ### État actuel
+
+1022 tests passants, **0 `xfail`**, 96 % de couverture.
+
+Les fichiers ajoutés depuis l'audit : `test_policy_paths.py`,
+`test_policy_engine.py`, `test_tool_schema.py`, `test_tool_registry.py`,
+`test_fs_tools.py`, `test_web_tools.py`, `test_app_tools.py`,
+`test_selection.py`, `test_mcp_servers.py`, `test_mcp_manager.py`,
+`test_mcp_adapter.py`, `test_builtin_assembly.py`, `test_speech.py`,
+`test_barge_in.py`, `test_conversation_store.py`, `test_llm_providers.py`,
+et `tests/eval/`.
+
+### État au moment de l'audit
 
 344 tests, 306 passants et 38 `xfail(strict)`, 96 % de couverture.
 

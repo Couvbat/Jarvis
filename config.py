@@ -40,6 +40,25 @@ class Settings(BaseSettings):
     # LLM settings
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:8b"
+    # A second Ollama to fall back to when the first one cannot be reached:
+    # typically a self-hosted box on the LAN holding the big model, and a
+    # small model on this machine for when the LAN is not there. Leave the
+    # host empty to run with one provider.
+    ollama_fallback_host: str = ""
+    ollama_fallback_model: str = ""
+    # A small fallback model picks badly from a large toolbox, so it is
+    # offered fewer tools than the primary. 0 means no cap.
+    ollama_fallback_max_tools: int = 8
+    # More than two providers, or per-provider context windows, go in this
+    # file; when it exists it replaces the three settings above.
+    llm_providers_path: str = "llm_providers.json"
+    # A provider probe runs before the first word is spoken, so it has to be
+    # quick. Raise it if a remote host is slow to answer.
+    llm_probe_timeout: float = 5.0
+    # How long to stay on a fallback before looking for the preferred
+    # provider again, so a brief network blink does not strand the session
+    # on the small model.
+    llm_provider_recheck_seconds: float = 60.0
     llm_temperature: float = 0.7
     llm_max_tokens: int = 1000
     # Ollama's context window defaults to a few thousand tokens whatever the

@@ -93,6 +93,11 @@ ollama pull mistral:7b       # Alternative
 ollama pull llama3.1:8b-q4_0 # Quantized version for 8GB RAM
 ```
 
+Ollama does not have to run on this machine. If you self-host one on a NAS or
+a server, point `OLLAMA_HOST` at it and set a small local model as a fallback
+for when that box is unreachable - see
+[Remote and fallback providers](#remote-and-fallback-providers).
+
 ### 6. Configure Environment
 
 ```bash
@@ -205,6 +210,49 @@ Edit [.env](.env) to customize:
 - `OLLAMA_MODEL`: Model name (e.g., `llama3.1:8b`)
 - `LLM_TEMPERATURE`: Response creativity (0.0-1.0, default: 0.7)
 - `LLM_MAX_TOKENS`: Maximum response length (default: 1000)
+- `LLM_NUM_CTX`: Context window (default: 8192). Ollama defaults to a few
+  thousand tokens whatever the model's native size, and the tool schemas are
+  re-sent every turn.
+
+### Remote and fallback providers
+
+A self-hosted Ollama on the LAN and a small model on this machine are not the
+same thing, and which one is reachable changes through the day. Jarvis takes a
+list of providers, most preferred first: the first one that answers **and** has
+its model pulled serves the turn.
+
+```bash
+# .env - the big model lives on the NAS, a small one here for when it doesn't
+OLLAMA_HOST=http://nas.local:11434
+OLLAMA_MODEL=qwen3:32b
+OLLAMA_FALLBACK_HOST=http://localhost:11434
+OLLAMA_FALLBACK_MODEL=llama3.2:3b
+OLLAMA_FALLBACK_MAX_TOOLS=8
+```
+
+What this buys you:
+
+- **The NAS being off does not stop the session.** The startup line names the
+  provider that is answering and why the other one is not.
+- **Coming back is automatic.** After `LLM_PROVIDER_RECHECK_SECONDS` (60 by
+  default) Jarvis looks for the preferred provider again, so one blink of the
+  network does not strand the session on the small model.
+- **The small model gets a smaller toolbox.** A 3B model picks badly from a
+  32B's tool list, so `OLLAMA_FALLBACK_MAX_TOOLS` caps what it is offered.
+- **Failing over mid-answer does not repeat speech.** Once a fragment has been
+  spoken the turn is committed to that provider: you hear an apology, not the
+  same sentence twice in two different voices.
+
+A provider is skipped only for being unreachable or missing its model. An
+answer that looks wrong is never a reason to swap models mid-conversation.
+
+Three or more providers, or per-provider context windows, go in a file:
+
+```bash
+cp llm_providers.example.json llm_providers.json
+```
+
+When `llm_providers.json` exists it replaces the `OLLAMA_*` settings above.
 
 ### TTS Settings
 - `PIPER_MODEL`: Voice model (default: `en_US-lessac-medium`)
@@ -223,6 +271,7 @@ Jarvis/
 ├── audio_handler.py       # Audio I/O and VAD
 ├── stt_module.py          # Speech-to-text (Whisper)
 ├── llm_module.py          # LLM integration (Ollama)
+├── llm_providers.py       # Ordered providers, probing and failover
 ├── tts_module.py          # Text-to-speech (Piper)
 ├── tui.py                 # Rich terminal interface
 ├── text_utils.py          # Shared normalisation and tokenisation
@@ -244,6 +293,7 @@ Jarvis/
 ├── requirements-dev.txt   # Development dependencies
 ├── requirements-test.txt  # Test-only dependencies (no native deps)
 ├── .env.example          # Example configuration
+├── llm_providers.example.json  # Example provider list (optional)
 ├── .env                  # Your configuration (create this)
 └── piper/                # Piper binary and models (created by setup)
 ```
@@ -299,6 +349,11 @@ ollama list
 # Pull required model
 ollama pull llama3.1:8b
 ```
+
+**Answers got worse / it used the wrong model:** the startup line names the
+provider that is serving the session, and a fallback is logged as
+`Falling back from ... to ...`. A remote provider that is up but slow to
+answer its model listing looks unreachable; raise `LLM_PROBE_TIMEOUT`.
 
 ### Piper Issues
 
