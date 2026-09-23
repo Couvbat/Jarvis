@@ -1,11 +1,11 @@
 """Speech-to-Text module using faster-whisper."""
 
+from typing import Any, Dict, Optional
+
 import numpy as np
 from faster_whisper import WhisperModel
 from loguru import logger
 from config import settings
-import tempfile
-import soundfile as sf
 
 
 class STTModule:
@@ -17,6 +17,9 @@ class STTModule:
         self.compute_type = settings.whisper_compute_type
         self.language = settings.whisper_language
         self.model = None
+        #: What the last transcription sounded like, whatever was asked for.
+        self.detected_language: Optional[str] = None
+        self.detected_language_probability: float = 0.0
         
     def initialize(self):
         """Load the Whisper model."""
@@ -46,6 +49,27 @@ class STTModule:
         """
         self.language = language
         logger.info(f"Language changed to: {language}")
+
+    def _language_argument(self) -> Optional[str]:
+        """What to hand the model.
+
+        "auto" is how the README spells automatic detection, but faster-whisper
+        wants None for that; the literal string is not a valid code and the
+        model rejects it.
+        """
+        if not self.language or self.language.strip().lower() in ("auto", ""):
+            return None
+        return self.language
+
+    @staticmethod
+    def _join(segments) -> str:
+        """Assemble segments into one line.
+
+        Whisper segments already start with a space, so joining on one doubled
+        every gap - visible in the prompt and in the transcript panel.
+        """
+        text = "".join(segment.text for segment in segments)
+        return " ".join(text.split())
     
     def transcribe(self, audio_data: np.ndarray, sample_rate: int = 16000) -> str:
         """
@@ -73,24 +97,47 @@ class STTModule:
             # Transcribe
             segments, info = self.model.transcribe(
                 audio_float,
-                language=self.language,
+                language=self._language_argument(),
                 beam_size=5,
                 vad_filter=True,
                 vad_parameters=dict(min_silence_duration_ms=500)
             )
             
-            # Combine all segments
-            transcription = " ".join([segment.text for segment in segments])
-            transcription = transcription.strip()
+            transcription = self._join(segments)
             
             logger.info(f"Transcription: {transcription}")
-            logger.debug(f"Detected language: {info.language} (probability: {info.language_probability:.2f})")
+            logger.debug(
+                f"Detected language: {info.language} "
+                f"(probability: {info.language_probability:.2f})"
+            )
+            
+            self.detected_language = info.language
+            self.detected_language_probability = info.language_probability
             
             return transcription
             
         except Exception as e:
             logger.error(f"Transcription error: {e}")
             raise
+
+    def transcribe_with_info(
+        self, audio_data: np.ndarray, sample_rate: int = 16000
+    ) -> Dict[str, Any]:
+        """
+        Transcribe, and say which language it heard.
+        
+        The detected language was logged and then thrown away, so nothing
+        could act on a speaker switching language mid-conversation.
+        
+        Returns:
+            Dict with 'text', 'language' and 'language_probability'
+        """
+        text = self.transcribe(audio_data, sample_rate)
+        return {
+            "text": text,
+            "language": self.detected_language,
+            "language_probability": self.detected_language_probability,
+        }
     
     def transcribe_file(self, audio_file: str) -> str:
         """
@@ -110,13 +157,13 @@ class STTModule:
         try:
             segments, info = self.model.transcribe(
                 audio_file,
-                language=self.language,
+                language=self._language_argument(),
                 beam_size=5,
                 vad_filter=True
             )
             
-            transcription = " ".join([segment.text for segment in segments])
-            transcription = transcription.strip()
+            transcription = self._join(segments)
+            self.detected_language = info.language
             
             logger.info(f"Transcription: {transcription}")
             return transcription

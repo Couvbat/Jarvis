@@ -248,6 +248,75 @@ class TestToolSelection:
         assert module._last_utterance == ""
 
 
+class TestStreaming:
+    """Speaking the first sentence before the rest is generated is what
+    separates an assistant from a batch job."""
+
+    async def test_fragments_arrive_as_they_are_generated(self, fake_ollama):
+        fragments = []
+        fake_ollama.responses.append(make_chat_response("Bonjour. Comment vas-tu ?"))
+        await LLMModule().chat("salut", on_text=fragments.append)
+        assert len(fragments) > 1
+        assert "".join(fragments) == "Bonjour. Comment vas-tu ?"
+
+    async def test_the_full_response_is_still_returned(self, fake_ollama):
+        fake_ollama.responses.append(make_chat_response("Bonjour tout le monde"))
+        result = await LLMModule().chat("salut", on_text=lambda f: None)
+        assert result["response"] == "Bonjour tout le monde"
+
+    async def test_streaming_is_requested(self, fake_ollama):
+        fake_ollama.responses.append(make_chat_response("ok"))
+        await LLMModule().chat("salut")
+        assert fake_ollama.calls[0]["stream"] is True
+
+    async def test_no_callback_is_fine(self, fake_ollama):
+        fake_ollama.responses.append(make_chat_response("ok"))
+        assert (await LLMModule().chat("salut"))["response"] == "ok"
+
+    async def test_tool_calls_survive_streaming(self, fake_ollama):
+        call = make_tool_call("fs__read", {"path": "/tmp/a"})
+        fake_ollama.responses.append(make_chat_response("Je regarde.", [call]))
+        result = await LLMModule().chat("lis le fichier", on_text=lambda f: None)
+        assert result["tool_calls"][0]["function"]["name"] == "fs__read"
+
+    async def test_prose_alongside_a_tool_call_is_still_streamed(self, fake_ollama):
+        """"I'll look that up" while the tool runs is the right thing to say."""
+        fragments = []
+        call = make_tool_call("fs__read", {"path": "/tmp/a"})
+        fake_ollama.responses.append(make_chat_response("Je regarde ça.", [call]))
+        await LLMModule().chat("lis le fichier", on_text=fragments.append)
+        assert "".join(fragments) == "Je regarde ça."
+
+    async def test_the_history_records_the_assembled_text(self, fake_ollama):
+        fake_ollama.responses.append(make_chat_response("Bonjour tout le monde"))
+        module = LLMModule()
+        await module.chat("salut")
+        assert module.history.get_messages()[-1]["content"] == "Bonjour tout le monde"
+
+    async def test_a_failure_mid_stream_is_converted_to_a_message(self, fake_ollama):
+        fake_ollama.error = ConnectionError("ollama went away")
+        result = await LLMModule().chat("salut", on_text=lambda f: None)
+        assert "error" in result["response"].lower()
+
+    async def test_the_error_message_is_streamed_too(self, fake_ollama):
+        """Otherwise a dead Ollama is a silent one: the caller speaks what it
+        is handed through on_text, and nothing else."""
+        fragments = []
+        fake_ollama.error = ConnectionError("ollama went away")
+        await LLMModule().chat("salut", on_text=fragments.append)
+        assert "error" in "".join(fragments).lower()
+
+    async def test_the_follow_up_streams_too(self, fake_ollama):
+        fragments = []
+        fake_ollama.responses.extend([
+            make_chat_response("un"), make_chat_response("Voici le résultat."),
+        ])
+        module = LLMModule()
+        await module.chat("salut")
+        await module.continue_after_tools(on_text=fragments.append)
+        assert "".join(fragments) == "Voici le résultat."
+
+
 class TestContextWindow:
     async def test_num_ctx_is_sent(self, fake_ollama, settings):
         """Ollama's context defaults to a few thousand tokens whatever the
@@ -457,7 +526,38 @@ async def test_reset_conversation_keeps_exactly_one_system_prompt(fake_ollama):
     assert len(module.history.get_messages()) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-10: no health check against the Ollama server")
-def test_module_exposes_a_health_check(fake_ollama):
-    """Without one, a stopped Ollama only surfaces as a spoken error per turn."""
-    assert LLMModule().is_available() in (True, False)
+class TestHealthCheck:
+    """Without one, a stopped Ollama only surfaces as a spoken apology per
+    turn, which tells the user nothing about what to fix."""
+
+    async def test_a_reachable_server_reports_available(self, fake_ollama):
+        assert await LLMModule().is_available() is True
+
+    async def test_an_unreachable_server_reports_unavailable(self, fake_ollama):
+        fake_ollama.list_error = ConnectionError("connection refused")
+        assert await LLMModule().is_available() is False
+
+    async def test_a_pulled_model_is_found(self, fake_ollama, settings):
+        settings.ollama_model = "llama3.1:8b"
+        fake_ollama.models = ["llama3.1:8b", "qwen3:8b"]
+        assert await LLMModule().has_model() is True
+
+    async def test_a_tag_difference_still_matches(self, fake_ollama, settings):
+        """"llama3.1" and "llama3.1:8b" are the same pull to a user."""
+        settings.ollama_model = "llama3.1:8b"
+        fake_ollama.models = ["llama3.1:latest"]
+        assert await LLMModule().has_model() is True
+
+    async def test_a_missing_model_is_reported(self, fake_ollama, settings):
+        settings.ollama_model = "llama3.1:8b"
+        fake_ollama.models = ["mistral:7b"]
+        assert await LLMModule().has_model() is False
+
+    async def test_an_unreachable_server_cannot_say(self, fake_ollama):
+        """None means "could not tell", which is not the same as "missing"."""
+        fake_ollama.list_error = ConnectionError("refused")
+        assert await LLMModule().has_model() is None
+
+    async def test_an_empty_listing_cannot_say(self, fake_ollama):
+        fake_ollama.models = []
+        assert await LLMModule().has_model() is None

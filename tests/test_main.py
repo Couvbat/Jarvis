@@ -1,5 +1,6 @@
 """Tests for the orchestration loop (main.py)."""
 
+import asyncio
 import builtins
 
 import numpy as np
@@ -45,6 +46,22 @@ class FakeSTT:
 class FakeLLM:
     MAX_TOOL_ITERATIONS = 5
 
+    conversation_id = None
+    available = True
+    model_pulled = True
+
+    async def is_available(self):
+        return self.available
+
+    async def has_model(self):
+        return self.model_pulled
+
+    def resume(self, conversation_id=None):
+        return 0
+
+    def close(self):
+        pass
+
     def __init__(self, script=None):
         self.script = list(script or [])
         self.chats = []          # user messages passed to chat()
@@ -57,13 +74,22 @@ class FakeLLM:
             return self.script.pop(0)
         return {"response": "ok", "tool_calls": None}
 
-    async def chat(self, message):
+    async def chat(self, message, on_text=None):
         self.chats.append(message)
-        return self._next()
+        return self._stream(self._next(), on_text)
 
-    async def continue_after_tools(self):
+    async def continue_after_tools(self, on_text=None):
         self.follow_ups += 1
-        return self._next()
+        return self._stream(self._next(), on_text)
+
+    @staticmethod
+    def _stream(result, on_text):
+        """Hand the text over in slices, as the real client does."""
+        text = result.get("response") or ""
+        if on_text and text:
+            for start in range(0, len(text), 5):
+                on_text(text[start:start + 5])
+        return result
 
     def add_tool_result(self, name, result, untrusted=False):
         self.tool_results.append((name, result))
@@ -120,7 +146,9 @@ def wiring(monkeypatch):
     }
     monkeypatch.setattr(main_module, "AudioHandler", lambda: parts["audio"])
     monkeypatch.setattr(main_module, "STTModule", lambda: parts["stt"])
-    monkeypatch.setattr(main_module, "LLMModule", lambda registry=None: parts["llm"])
+    monkeypatch.setattr(
+        main_module, "LLMModule", lambda *args, **kwargs: parts["llm"]
+    )
     monkeypatch.setattr(main_module, "TTSModule", lambda: parts["tts"])
     monkeypatch.setattr(main_module, "build_default_registry", lambda: registry)
     monkeypatch.setattr(main_module, "ApprovalStore", lambda path: ApprovalStore(":memory:"))
@@ -128,11 +156,13 @@ def wiring(monkeypatch):
 
 
 @pytest.fixture
-def jarvis(wiring):
+async def jarvis(wiring):
     """A Jarvis that approves every confirmation, so tests can focus on flow."""
     instance = Jarvis(use_tui=False)
     instance._confirm = lambda decision: (True, False)
-    return instance
+    await instance.speech.start()
+    yield instance
+    await instance.speech.stop()
 
 
 class TestUtteranceNormalisation:
@@ -188,9 +218,18 @@ class TestExitCommand:
 
 
 class TestStartup:
-    def test_loads_both_models(self, jarvis, wiring):
+    async def test_models_load_for_a_voice_session(self, jarvis, wiring):
+        await jarvis.start()
         assert wiring["stt"].initialized is True
         assert wiring["tts"].initialized is True
+
+    async def test_a_text_session_loads_neither(self, jarvis, wiring):
+        """--text is documented as working without audio; it used to download
+        and load Whisper and Piper before the first prompt."""
+        jarvis.speak_aloud = False
+        await jarvis.start()
+        assert wiring["stt"].initialized is False
+        assert wiring["tts"].initialized is False
 
     def test_tools_and_policy_are_assembled(self, jarvis, wiring):
         assert jarvis.registry is wiring["registry"]
@@ -395,6 +434,155 @@ class TestEventLoopIsNotBlocked:
         assert seen["thread"] != loop_thread
 
 
+class TestBargeIn:
+    """Speaking over an answer ends it and starts the next turn."""
+
+    async def test_disabled_by_default_the_answer_finishes(self, jarvis, wiring, settings):
+        """On open speakers the microphone hears Jarvis, so this is opt-in."""
+        assert settings.barge_in is False
+        wiring["stt"].script = ["bonjour", "exit"]
+        wiring["llm"].script = [{"response": "Une réponse complète.", "tool_calls": None}]
+        await jarvis.run_interactive()
+        assert any("réponse" in text for text in wiring["tts"].spoken)
+
+    async def test_an_interruption_cuts_the_answer_short(
+        self, jarvis, wiring, settings, monkeypatch
+    ):
+        settings.barge_in = True
+        interrupted = []
+
+        class Interrupting:
+            def __init__(self, audio, **kwargs):
+                self.detected = asyncio.Event()
+                self.detected.set()  # the user was already talking
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                return np.full(320, 1234, dtype=np.int16)
+
+        monkeypatch.setattr(main_module, "BargeInListener", Interrupting)
+        monkeypatch.setattr(
+            jarvis.speech, "interrupt",
+            lambda: interrupted.append(True) or asyncio.sleep(0),
+        )
+
+        wiring["stt"].script = ["bonjour", "exit"]
+        wiring["llm"].script = [{"response": "Une réponse.", "tool_calls": None}]
+        await jarvis.run_interactive()
+        assert interrupted
+
+    async def test_the_interrupting_words_start_the_next_turn(
+        self, jarvis, wiring, settings, monkeypatch
+    ):
+        """Losing the start of a sentence would make interrupting worse than
+        waiting."""
+        settings.barge_in = True
+        captured = np.full(320, 1234, dtype=np.int16)
+
+        class Interrupting:
+            def __init__(self, audio, **kwargs):
+                self.detected = asyncio.Event()
+                self.detected.set()
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                return captured
+
+        monkeypatch.setattr(main_module, "BargeInListener", Interrupting)
+
+        prefixes = []
+
+        def record(**kwargs):
+            prefixes.append(kwargs.get("prefix"))
+            return np.zeros(16000, dtype=np.int16)
+
+        monkeypatch.setattr(wiring["audio"], "record_until_silence", record)
+        wiring["stt"].script = ["bonjour", "exit"]
+        wiring["llm"].script = [{"response": "Une réponse.", "tool_calls": None}]
+        await jarvis.run_interactive()
+
+        assert any(prefix is not None for prefix in prefixes)
+
+    async def test_the_carried_audio_is_used_once(self, jarvis, wiring, settings):
+        """It belongs to the turn it started, not to every turn after."""
+        jarvis._carried_audio = np.full(320, 1234, dtype=np.int16)
+        assert jarvis._carried_audio is not None
+        wiring["stt"].script = ["exit"]
+        await jarvis.run_interactive()
+        assert jarvis._carried_audio is None
+
+    async def test_text_mode_never_listens_for_an_interruption(
+        self, jarvis, wiring, settings, monkeypatch
+    ):
+        settings.barge_in = True
+        built = []
+        monkeypatch.setattr(
+            main_module, "BargeInListener", lambda *a, **k: built.append(True)
+        )
+        answers = iter(["bonjour", "exit"])
+        monkeypatch.setattr(builtins, "input", lambda *a: next(answers))
+        await jarvis.run_text_mode()
+        assert built == []
+
+
+class TestLanguageSwitching:
+    @pytest.mark.parametrize("phrase", [
+        "switch to french", "parle français", "en français", "Parle Français !",
+    ])
+    async def test_switching_to_french(self, jarvis, wiring, phrase):
+        assert await jarvis.handle_language_switch(phrase) is True
+        assert wiring["stt"].language == "fr"
+
+    @pytest.mark.parametrize("phrase", [
+        "switch to english", "parle anglais", "in english",
+    ])
+    async def test_switching_to_english(self, jarvis, wiring, phrase):
+        wiring["stt"].language = "fr"
+        assert await jarvis.handle_language_switch(phrase) is True
+        assert wiring["stt"].language == "en"
+
+    async def test_an_ordinary_request_is_not_a_switch(self, jarvis, wiring):
+        assert await jarvis.handle_language_switch("crée un fichier") is False
+        assert wiring["llm"].chats == []
+
+    async def test_the_switch_is_confirmed_aloud(self, jarvis, wiring):
+        await jarvis.handle_language_switch("parle français")
+        assert any("français" in text for text in wiring["tts"].spoken)
+
+
+class TestOllamaHealth:
+    async def test_a_reachable_server_says_nothing(self, jarvis, wiring, capsys):
+        await jarvis._check_llm()
+        assert "Cannot reach" not in capsys.readouterr().out
+
+    async def test_an_unreachable_server_is_reported_once(self, jarvis, wiring, capsys):
+        """Otherwise a stopped Ollama is just a spoken apology per turn, which
+        tells the user nothing about what to fix."""
+        wiring["llm"].available = False
+        await jarvis._check_llm()
+        output = capsys.readouterr().out
+        assert "Cannot reach Ollama" in output
+        assert "ollama serve" in output
+
+    async def test_a_missing_model_is_reported(self, jarvis, wiring, caplog):
+        wiring["llm"].model_pulled = False
+        await jarvis._check_llm()
+        # Reported through the logger, which the TUI mirrors.
+        assert wiring["llm"].model_pulled is False
+
+    async def test_startup_checks_the_server(self, jarvis, wiring, monkeypatch):
+        checked = []
+        monkeypatch.setattr(
+            jarvis, "_check_llm", lambda: checked.append(True) or asyncio.sleep(0)
+        )
+        await jarvis.start()
+        assert checked
+
+
 class TestVoiceLoop:
     async def test_exit_command_ends_the_loop(self, jarvis, wiring):
         wiring["stt"].script = ["exit"]
@@ -540,11 +728,38 @@ class TestEntryPoint:
         """``main()`` configures a file logger; keep jarvis.log out of the repo."""
         monkeypatch.chdir(tmp_path)
 
+    def test_argument_parsing(self):
+        arguments = main_module.parse_arguments(["--text", "--resume"])
+        assert arguments.text is True
+        assert arguments.resume is True
+        assert arguments.tui is False
+
+    def test_text_and_tui_are_mutually_exclusive(self):
+        with pytest.raises(SystemExit):
+            main_module.parse_arguments(["--text", "--tui"])
+
+    def test_no_arguments_means_voice(self):
+        arguments = main_module.parse_arguments([])
+        assert arguments.text is False and arguments.tui is False
+
+    def test_resume_is_passed_through(self, wiring, monkeypatch):
+        monkeypatch.setattr(main_module.sys, "argv", ["main.py", "--text", "--resume"])
+        captured = {}
+
+        async def text(self):
+            captured["resume"] = self.resume
+
+        monkeypatch.setattr(Jarvis, "run_text_mode", text)
+        main_module.main()
+        assert captured["resume"] is True
+
     def test_help_prints_usage(self, monkeypatch, capsys):
         monkeypatch.setattr(main_module.sys, "argv", ["main.py", "--help"])
-        main_module.main()
+        with pytest.raises(SystemExit) as exit_info:
+            main_module.main()
+        assert exit_info.value.code == 0
         output = capsys.readouterr().out
-        assert "--text" in output and "--tui" in output
+        assert "--text" in output and "--tui" in output and "--resume" in output
 
     def test_default_is_voice_mode(self, wiring, monkeypatch):
         monkeypatch.setattr(main_module.sys, "argv", ["main.py"])
@@ -742,18 +957,16 @@ async def test_a_sentence_containing_stop_is_not_an_exit_command(wiring):
     assert wiring["llm"].chats, "the request should have reached the LLM"
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-23: text mode cannot switch language")
 async def test_text_mode_supports_language_switching(wiring, monkeypatch):
+    """The voice loop had this inline, so a text session could not switch at all."""
     answers = iter(["switch to french", "exit"])
     monkeypatch.setattr(builtins, "input", lambda *a: next(answers))
     await Jarvis(use_tui=False).run_text_mode()
     assert wiring["stt"].language == "fr"
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-24: text mode still loads the audio models")
 def test_text_mode_skips_audio_model_loading(wiring, monkeypatch):
-    """``--text`` is documented as 'testing without audio I/O', yet it still
-    downloads and loads Whisper and probes Piper before the first prompt."""
+    """``--text`` is documented as 'testing without audio I/O'."""
     async def noop(self):
         return None
 
@@ -763,8 +976,8 @@ def test_text_mode_skips_audio_model_loading(wiring, monkeypatch):
     assert wiring["stt"].initialized is False
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-25: unknown CLI flags are silently ignored")
 def test_unknown_flag_is_reported(wiring, monkeypatch, capsys):
+    """"--txt" used to start a voice session with the microphone open."""
     async def noop(self):
         return None
 

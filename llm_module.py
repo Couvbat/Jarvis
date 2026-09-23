@@ -1,12 +1,18 @@
 """LLM module with Ollama integration and function calling."""
 
+import asyncio
 from collections.abc import Mapping
-from typing import List, Dict, Any, Optional
+from typing import Any, Callable, Dict, List, Optional
 import ollama
 from loguru import logger
 from config import settings
+from conversation_store import ConversationStore
 from tools.registry import ToolRegistry
 from tools.selection import ToolSelector, estimate_schema_tokens
+
+
+#: Seconds to wait when asking the server whether it is there.
+HEALTH_TIMEOUT = 5.0
 
 
 def to_plain(value: Any) -> Any:
@@ -32,10 +38,18 @@ class ConversationHistory:
     clearing cannot drop it, duplicate it, or count it against the limit.
     """
 
-    def __init__(self, max_history: int = 10):
+    def __init__(
+        self,
+        max_history: int = 10,
+        on_turn: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ):
         self.max_history = max(0, max_history)
         self.system_message: Optional[Dict[str, Any]] = None
         self.turns: List[Dict[str, Any]] = []
+        #: Called with each turn as it is appended. Trimming drops turns from
+        #: memory to stay inside the context window; whoever is listening keeps
+        #: the record, so the two must not be the same thing.
+        self.on_turn = on_turn
 
     def set_system(self, content: str):
         """Set (or replace) the system prompt."""
@@ -50,6 +64,14 @@ class ConversationHistory:
         message: Dict[str, Any] = {"role": role, "content": content}
         message.update({key: value for key, value in fields.items() if value})
         self.turns.append(message)
+
+        if self.on_turn is not None:
+            try:
+                self.on_turn(dict(message))
+            except Exception as e:
+                # A failing recorder must not cost the conversation.
+                logger.error(f"Could not record a turn: {e}")
+
         self._trim()
 
     def add_user(self, content: str):
@@ -95,6 +117,23 @@ class ConversationHistory:
         messages = [self.system_message] if self.system_message else []
         return messages + self.turns
 
+    def restore(self, messages: List[Dict[str, Any]]) -> int:
+        """Load turns from an earlier session without re-recording them."""
+        listener, self.on_turn = self.on_turn, None
+        try:
+            for message in messages:
+                role = message.get("role")
+                if role in (None, "system"):
+                    continue
+                fields = {
+                    key: value for key, value in message.items()
+                    if key not in ("role", "content")
+                }
+                self.add_message(role, str(message.get("content") or ""), **fields)
+        finally:
+            self.on_turn = listener
+        return len(self.turns)
+
     def clear(self):
         """Drop every turn, keeping the system prompt."""
         self.turns = []
@@ -128,8 +167,11 @@ speak English."""
         self,
         registry: Optional[ToolRegistry] = None,
         selector: Optional[ToolSelector] = None,
+        store: Optional[ConversationStore] = None,
     ):
         self.registry = registry
+        self.store = store
+        self.conversation_id: Optional[int] = None
         self.selector = selector if selector is not None else ToolSelector(
             threshold=settings.tool_selection_threshold,
             top_k=settings.tool_selection_top_k,
@@ -143,15 +185,90 @@ speak English."""
         self.model = settings.ollama_model
         self.temperature = settings.llm_temperature
         self.max_tokens = settings.llm_max_tokens
-        self.history = ConversationHistory(settings.max_conversation_history)
+        if self.store is not None:
+            self.conversation_id = self.store.start()
+
+        self.history = ConversationHistory(
+            settings.max_conversation_history, on_turn=self._record
+        )
         self.history.set_system(self.SYSTEM_PROMPT)
 
-    async def chat(self, user_message: str) -> Dict[str, Any]:
+    def _record(self, message: Dict[str, Any]) -> None:
+        """Write a turn to the conversation log, if one is being kept."""
+        if self.store is not None and self.conversation_id is not None:
+            self.store.append(self.conversation_id, message)
+
+    def resume(self, conversation_id: Optional[int] = None) -> int:
+        """Carry an earlier conversation's turns into this session.
+
+        Only the most recent turns come back: the end of a conversation is the
+        part still worth having, and the rest would not fit the context anyway.
+        """
+        if self.store is None:
+            return 0
+
+        source = conversation_id if conversation_id is not None else self.store.last_id()
+        if source is None or source == self.conversation_id:
+            return 0
+
+        restored = self.history.restore(
+            self.store.messages(source, limit=settings.max_conversation_history)
+        )
+        logger.info(f"Resumed {restored} turn(s) from conversation {source}")
+        return restored
+
+    async def is_available(self) -> bool:
+        """Whether the Ollama server answers.
+
+        Without this a stopped server only shows up as a spoken apology once
+        per turn, which tells the user nothing about what to fix.
+        """
+        try:
+            await asyncio.wait_for(self.client.list(), timeout=HEALTH_TIMEOUT)
+            return True
+        except Exception as e:
+            logger.warning(f"Ollama at {self.host} is not answering: {e}")
+            return False
+
+    async def has_model(self) -> Optional[bool]:
+        """Whether the configured model is pulled. None if that cannot be told."""
+        try:
+            listing = await asyncio.wait_for(self.client.list(), timeout=HEALTH_TIMEOUT)
+        except Exception:
+            return None
+
+        models = listing.get("models") if hasattr(listing, "get") else None
+        if not models:
+            return None
+
+        wanted = self.model.split(":")[0]
+        for entry in models:
+            name = str(
+                (entry.get("model") if hasattr(entry, "get") else None)
+                or (entry.get("name") if hasattr(entry, "get") else None)
+                or ""
+            )
+            if name == self.model or name.split(":")[0] == wanted:
+                return True
+        return False
+
+    def close(self) -> None:
+        """Mark the conversation finished."""
+        if self.store is not None and self.conversation_id is not None:
+            self.store.end(self.conversation_id)
+
+    async def chat(
+        self,
+        user_message: str,
+        on_text: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
         """
         Send a user message to the LLM and get its reply.
 
         Args:
             user_message: The user's message
+            on_text: Called with each fragment as it is generated, so speech
+                can start before the answer is finished
 
         Returns:
             Dict with 'response' (str) and 'tool_calls' (list or None)
@@ -159,9 +276,11 @@ speak English."""
         logger.info(f"User: {user_message}")
         self._last_utterance = user_message
         self.history.add_user(user_message)
-        return await self._generate()
+        return await self._generate(on_text)
 
-    async def continue_after_tools(self) -> Dict[str, Any]:
+    async def continue_after_tools(
+        self, on_text: Optional[Callable[[str], None]] = None
+    ) -> Dict[str, Any]:
         """
         Ask the model to carry on from the tool results already in history.
 
@@ -171,15 +290,24 @@ speak English."""
         written in.
         """
         logger.info("Continuing after tool results")
-        return await self._generate()
+        return await self._generate(on_text)
 
-    async def _generate(self) -> Dict[str, Any]:
-        """Run one model turn against the current history."""
+    async def _generate(
+        self, on_text: Optional[Callable[[str], None]] = None
+    ) -> Dict[str, Any]:
+        """Run one model turn against the current history.
+
+        Streamed, so a caller can start speaking the first sentence while the
+        rest is still being generated. That is the difference between an
+        assistant and a batch job: total time barely moves, but the wait
+        before the first sound roughly halves.
+        """
         try:
-            response = await self.client.chat(
+            stream = await self.client.chat(
                 model=self.model,
                 messages=self.history.get_messages(),
                 tools=self.available_tools(),
+                stream=True,
                 options={
                     "temperature": self.temperature,
                     "num_predict": self.max_tokens,
@@ -187,10 +315,26 @@ speak English."""
                 }
             )
 
-            message = response.get("message", {}) or {}
-            content = message.get("content", "") or ""
-            tool_calls = to_plain(message.get("tool_calls") or [])
+            parts: List[str] = []
+            tool_calls: List[Any] = []
 
+            async for chunk in stream:
+                message = chunk.get("message", {}) or {}
+
+                fragment = message.get("content") or ""
+                if fragment:
+                    parts.append(fragment)
+                    if on_text is not None:
+                        # Prose that arrives alongside a tool call is spoken
+                        # too: "I'll look that up" while the tool runs is the
+                        # right thing to say, not a leak.
+                        on_text(fragment)
+
+                calls = message.get("tool_calls")
+                if calls:
+                    tool_calls.extend(to_plain(calls))
+
+            content = "".join(parts)
             self.history.add_assistant(content, tool_calls)
 
             logger.info(f"Assistant: {content}")
@@ -206,6 +350,10 @@ speak English."""
             logger.error(f"LLM error: {e}")
             error_response = "I'm sorry, I encountered an error processing your request."
             self.history.add_assistant(error_response)
+            if on_text is not None:
+                # Down the same channel as any other text, so the caller has
+                # no special case and the user actually hears about it.
+                on_text(error_response)
             return {"response": error_response, "tool_calls": None}
 
     def available_tools(self) -> List[Dict[str, Any]]:
@@ -246,8 +394,15 @@ speak English."""
         self.history.add_tool_result(tool_name, result, untrusted=untrusted)
 
     def reset_conversation(self):
-        """Reset conversation history, keeping the system prompt."""
+        """Reset conversation history, keeping the system prompt.
+
+        The log is not rewound: what was said was said, and a new conversation
+        is opened rather than the old one overwritten.
+        """
         self.history.clear()
         self.selector.reset()
         self._last_utterance = ""
+        if self.store is not None:
+            self.close()
+            self.conversation_id = self.store.start()
         logger.info("Conversation history reset")

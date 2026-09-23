@@ -68,13 +68,18 @@ pip install -r requirements.txt
 ### 4. Install Piper TTS
 
 ```bash
-# Automated installation
+# English voice (default)
 python setup_piper.py
 
-# Or manual installation:
-# Download from: https://github.com/rhasspy/piper/releases
-# Extract and place binary in ./piper/piper
+# French voice - WHISPER_LANGUAGE defaults to fr, so you probably want this
+python setup_piper.py --voice fr_FR-siwis-medium
+
+python setup_piper.py --list-voices
 ```
+
+Downloads are checked against pinned SHA-256 digests before anything is
+extracted or marked executable, and archives are extracted with the member
+filter that refuses paths escaping the target directory.
 
 ### 5. Install and Configure Ollama
 

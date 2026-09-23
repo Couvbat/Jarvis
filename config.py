@@ -15,8 +15,17 @@ class Settings(BaseSettings):
     )
     
     # Audio settings
+    # Off by default: a microphone in the same room as a speaker hears the
+    # speaker, so without echo cancellation Jarvis interrupts itself. With
+    # headphones, or a mic that cancels echo in hardware, turn this on.
+    barge_in: bool = False
+    barge_in_min_speech_ms: int = 200
     sample_rate: int = 16000
     channels: int = 1
+    # Which microphone to use: a name, an index, or empty for the system
+    # default. `python -c "import sounddevice; print(sounddevice.query_devices())"`
+    # lists them.
+    audio_input_device: str = ""
     # 20 ms at 16 kHz. Silence is only re-checked once per captured block, so
     # smaller blocks make end-of-speech detection more responsive. The VAD
     # itself carves its own frames, so any value works.
@@ -76,6 +85,8 @@ class Settings(BaseSettings):
     
     # Persistent state
     data_dir: str = "~/.local/share/jarvis"
+    # Conversations are written to disk in the clear, on this machine.
+    conversation_history: bool = True
     
     # Logging
     log_level: str = "INFO"
@@ -89,6 +100,11 @@ class Settings(BaseSettings):
     def approvals_path(self) -> Path:
         """Where standing approvals are kept."""
         return Path(self.data_dir).expanduser() / "approvals.db"
+    
+    @property
+    def conversations_path(self) -> Path:
+        """Where conversation history is kept."""
+        return Path(self.data_dir).expanduser() / "conversations.db"
     
     @property
     def gui_applications_list(self) -> List[str]:

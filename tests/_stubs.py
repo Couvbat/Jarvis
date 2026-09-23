@@ -273,6 +273,37 @@ def make_tool_call(name: str, arguments: Optional[dict] = None,
                                                arguments=arguments or {}))
 
 
+class _AsyncStream:
+    """Delivers a scripted response the way the real client streams it.
+
+    The content is handed over in small slices, because a caller that only
+    works when the whole answer arrives at once is not actually streaming.
+    """
+
+    def __init__(self, response: Any, slice_size: int = 7):
+        self.response = response
+        self.slice_size = slice_size
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        message = self.response.get("message", {}) or {}
+        content = message.get("content") or ""
+        tool_calls = message.get("tool_calls") or []
+
+        for start in range(0, len(content), self.slice_size):
+            yield SubscriptableModel(
+                message=SubscriptableModel(
+                    content=content[start:start + self.slice_size], tool_calls=[]
+                )
+            )
+
+        yield SubscriptableModel(
+            message=SubscriptableModel(content="", tool_calls=tool_calls)
+        )
+
+
 class _AsyncClient:
     """Stand-in for ``ollama.AsyncClient``.
 
@@ -285,7 +316,18 @@ class _AsyncClient:
         _OLLAMA_MODULE["instance"].hosts.append(host)
 
     async def chat(self, **kwargs: Any) -> Any:
-        return _OLLAMA_MODULE["instance"].chat(**kwargs)
+        response = _OLLAMA_MODULE["instance"].chat(**kwargs)
+        if kwargs.get("stream"):
+            return _AsyncStream(response)
+        return response
+
+    async def list(self) -> Any:
+        module = _OLLAMA_MODULE["instance"]
+        if module.list_error is not None:
+            raise module.list_error
+        return SubscriptableModel(
+            models=[SubscriptableModel(model=name) for name in module.models]
+        )
 
 
 #: Lets _AsyncClient reach the module object that owns the scripted responses.
@@ -299,6 +341,8 @@ class _OllamaModule(types.ModuleType):
         self.responses: List[Any] = []
         self.hosts: List[Optional[str]] = []
         self.error: Optional[Exception] = None
+        self.list_error: Optional[Exception] = None
+        self.models: List[str] = ["llama3.1:8b"]
         self.AsyncClient = _AsyncClient
         _OLLAMA_MODULE["instance"] = self
 
@@ -324,6 +368,8 @@ class _OllamaModule(types.ModuleType):
         self.responses.clear()
         self.hosts.clear()
         self.error = None
+        self.list_error = None
+        self.models = ["llama3.1:8b"]
 
 
 # --------------------------------------------------------------------------- #

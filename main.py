@@ -1,16 +1,21 @@
 """Main orchestration loop for Jarvis voice assistant."""
 
+import argparse
 import asyncio
 import sys
 from loguru import logger
 from config import settings
 from audio_handler import AudioHandler
+from conversation_store import ConversationStore
 from stt_module import STTModule
 from llm_module import LLMModule
 from policy.engine import PolicyEngine, Surface
 from policy.store import ApprovalStore
 from policy.taint import TaintState
 from tools.builtin import attach_mcp_tools, build_default_registry, build_mcp_manager
+from speech.barge_in import VAD_FRAME_MS, BargeInListener
+from speech.chunker import SentenceChunker
+from speech.pipeline import SpeechPipeline
 from text_utils import normalise
 from tools.schema import ToolResult
 from tts_module import TTSModule
@@ -56,8 +61,15 @@ def is_exit_command(text: str) -> bool:
 class Jarvis:
     """Main voice assistant orchestrator."""
     
-    def __init__(self, use_tui: bool = False):
+    def __init__(
+        self,
+        use_tui: bool = False,
+        speak_aloud: bool = True,
+        resume: bool = False,
+    ):
         self.use_tui = use_tui
+        self.speak_aloud = speak_aloud
+        self.resume = resume
         self.tui = None
         
         if self.use_tui:
@@ -75,13 +87,15 @@ class Jarvis:
         # Initialize components
         self.audio = AudioHandler()
         self.stt = STTModule()
-        self.llm = LLMModule(self.registry)
+        self.conversations = (
+            ConversationStore(settings.conversations_path)
+            if settings.conversation_history else None
+        )
+        self.llm = LLMModule(self.registry, store=self.conversations)
         self.tts = TTSModule()
-        
-        # Load models
-        logger.info("Loading models (this may take a moment)...")
-        self.stt.initialize()
-        self.tts.initialize()
+        self.speech = SpeechPipeline(self.tts, self.audio, on_fallback=self._show)
+        #: Audio captured by an interruption, to start the next turn with.
+        self._carried_audio = None
         
         logger.info("Jarvis initialized and ready!")
         
@@ -135,6 +149,27 @@ class Jarvis:
         started from __init__; and a server that will not come up must not
         stop the assistant from running without it.
         """
+        if self.speak_aloud:
+            # Whisper and Piper are only needed by a session that listens and
+            # speaks. Text mode used to download and load both before its
+            # first prompt.
+            logger.info("Loading models (this may take a moment)...")
+            await asyncio.to_thread(self.stt.initialize)
+            await asyncio.to_thread(self.tts.initialize)
+            await self.speech.start()
+
+        await self._check_llm()
+
+        if self.resume:
+            restored = self.llm.resume()
+            message = (
+                f"Resumed {restored} turn(s) from the last conversation"
+                if restored else "No earlier conversation to resume"
+            )
+            logger.info(message)
+            if self.use_tui:
+                self.tui.add_system_message(message)
+
         try:
             await attach_mcp_tools(self.registry, self.mcp)
         except Exception as e:
@@ -145,28 +180,135 @@ class Jarvis:
                 self.tui.add_system_message(f"MCP {name}: {status}")
 
     async def aclose(self):
-        """Disconnect the MCP servers."""
+        """Shut down the speech pipeline, the MCP servers and the log."""
+        try:
+            self.llm.close()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.error(f"Could not close the conversation log: {e}")
+        try:
+            await self.speech.stop()
+        except Exception as e:  # pragma: no cover - reported by the pipeline
+            logger.error(f"Speech shutdown failed: {e}")
         try:
             await self.mcp.stop()
         except Exception as e:  # pragma: no cover - reported by the manager
             logger.error(f"MCP shutdown failed: {e}")
 
-    async def _speak(self, text: str):
-        """Say something out loud, falling back to the terminal if TTS fails."""
-        try:
-            # Piper is a subprocess and playback blocks; neither belongs on the
-            # event loop.
-            audio, sample_rate = await asyncio.to_thread(self.tts.synthesize, text)
-            if len(audio) > 0:
-                # The rate comes from the synthesiser: Piper's *-medium voices
-                # are 22050 Hz but *-low voices are 16000 Hz, and assuming one
-                # of them plays the other at the wrong speed.
-                await asyncio.to_thread(self.audio.play_audio, audio, sample_rate)
-                return
-        except Exception as e:
-            logger.error(f"TTS error: {e}")
+    async def _check_llm(self) -> None:
+        """Say plainly when Ollama is not there, instead of once per turn."""
+        if await self.llm.is_available():
+            if await self.llm.has_model() is False:
+                message = (
+                    f"Ollama is running but '{settings.ollama_model}' is not "
+                    f"pulled. Run: ollama pull {settings.ollama_model}"
+                )
+                logger.warning(message)
+                if self.use_tui:
+                    self.tui.add_system_message(message)
+            return
 
+        message = (
+            f"Cannot reach Ollama at {settings.ollama_host}. "
+            f"Start it with: ollama serve"
+        )
+        logger.error(message)
+        if self.use_tui:
+            self.tui.add_system_message(message)
+        else:
+            print(message)
+
+    def _show(self, text: str) -> None:
+        """Put text in front of the user when it cannot be spoken."""
         print(f"Jarvis: {text}")
+
+    def _emit(self, text: str) -> None:
+        """Send a finished sentence wherever this session puts them."""
+        if not text.strip():
+            return
+        if self.speak_aloud:
+            self.speech.say(text)
+        else:
+            print(text, end=" ", flush=True)
+
+    async def _finish_speaking(self) -> bool:
+        """Wait for the answer to finish, unless the user talks over it.
+
+        Returns whether they did. The words that interrupted are kept for the
+        turn they begin: losing the start of a sentence would make
+        interrupting worse than waiting.
+        """
+        if not self.speak_aloud:
+            await self.speech.drain()
+            return False
+
+        if not settings.barge_in:
+            await self.speech.drain()
+            return False
+
+        listener = BargeInListener(
+            self.audio,
+            min_speech_frames=max(
+                1, settings.barge_in_min_speech_ms // VAD_FRAME_MS
+            ),
+        )
+        await listener.start()
+
+        drained = asyncio.create_task(self.speech.drain())
+        interrupted = asyncio.create_task(listener.detected.wait())
+        done, pending = await asyncio.wait(
+            {drained, interrupted}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+
+        captured = await listener.stop()
+
+        if interrupted in done:
+            logger.info("Interrupted by the user")
+            await self.speech.interrupt()
+            self._carried_audio = captured
+            if self.use_tui:
+                self.tui.add_system_message("Interrupted")
+            return True
+
+        return False
+
+    async def _speak(self, text: str) -> None:
+        """Say one fixed phrase and wait for it, e.g. a goodbye."""
+        self.speech.resume()
+        self._emit(text)
+        if self.speak_aloud:
+            await self.speech.drain()
+        else:
+            print()
+
+    async def handle_language_switch(self, user_text: str) -> bool:
+        """Switch language if that is what was asked. Returns whether it was.
+
+        Shared by both run modes: the voice loop had this inline, so a text
+        session could not change language at all.
+        """
+        phrase = normalise(user_text)
+
+        if any(cue in phrase for cue in ("switch to french", "parle francais",
+                                         "en francais", "in french")):
+            language, reply = "fr", "D'accord, je passe au français."
+        elif any(cue in phrase for cue in ("switch to english", "parle anglais",
+                                           "in english", "en anglais")):
+            language, reply = "en", "Okay, switching to English."
+        else:
+            return False
+
+        self.stt.set_language(language)
+        logger.info(f"Language switched to {language}")
+
+        if self.use_tui:
+            self.tui.update_language(language)
+            self.tui.add_assistant_message(reply)
+            self.tui.add_system_message(f"Language changed to {language}")
+
+        await self._speak(reply)
+        return True
 
     async def process_user_input(self, user_text: str) -> str:
         """
@@ -185,13 +327,31 @@ class Jarvis:
         # Taint is per turn: what the assistant read a minute ago should not
         # keep prompting for the rest of the session.
         self.taint.reset()
+        self.speech.resume()
 
-        result = await self.llm.chat(user_text)
+        chunker = SentenceChunker()
+
+        def on_text(fragment: str) -> None:
+            for sentence in chunker.feed(fragment):
+                self._emit(sentence)
+
+        def flush() -> None:
+            tail = chunker.flush()
+            if tail:
+                self._emit(tail)
+
+        result = await self.llm.chat(user_text, on_text=on_text)
+        flush()
 
         for _ in range(self.llm.MAX_TOOL_ITERATIONS):
             tool_calls = result["tool_calls"]
             if not tool_calls:
                 break
+
+            # Whatever the model said before asking for tools has been queued;
+            # let it finish so the user is not talked over by the next round.
+            if self.speak_aloud:
+                await self.speech.drain()
 
             logger.info(f"Executing {len(tool_calls)} tool call(s)")
             if self.use_tui:
@@ -206,15 +366,13 @@ class Jarvis:
             # No synthetic user turn here: the tool results are the new
             # information, and the follow-up may legitimately ask for more
             # tools, which is why this is a loop rather than one extra call.
-            result = await self.llm.continue_after_tools()
+            result = await self.llm.continue_after_tools(on_text=on_text)
+            flush()
         else:
             if result["tool_calls"]:
                 logger.warning(
                     f"Stopped after {self.llm.MAX_TOOL_ITERATIONS} tool rounds"
                 )
-
-        if self.use_tui:
-            self.tui.update_status("Speaking...")
 
         return result["response"]
 
@@ -267,6 +425,9 @@ class Jarvis:
 
     async def run_interactive(self):
         """Run in interactive voice mode."""
+        # The run method decides the mode, so an instance cannot be left
+        # configured to speak in a text session or stay mute in a voice one.
+        self.speak_aloud = True
         await self.start()
         if not self.use_tui:
             logger.info("\n" + "="*50)
@@ -287,10 +448,12 @@ class Jarvis:
                 
                 # Record audio
                 try:
+                    carried, self._carried_audio = self._carried_audio, None
                     audio_data = await asyncio.to_thread(
                         self.audio.record_until_silence,
                         silence_threshold=1.5,
                         max_duration=30.0,
+                        prefix=carried,
                     )
                     
                     if len(audio_data) < 1000:  # Too short
@@ -336,38 +499,7 @@ class Jarvis:
                         self.tui.update_status("Ready")
                     continue
                 
-                # Check for language switching commands
-                lower_text = user_text.lower()
-                if "switch to french" in lower_text or "parle français" in lower_text or "en français" in lower_text:
-                    self.stt.set_language("fr")
-                    response_text = "D'accord, je passe au français."
-                    logger.info("Language switched to French")
-                    
-                    if self.use_tui:
-                        self.tui.update_language("fr")
-                        self.tui.add_assistant_message(response_text)
-                        self.tui.add_system_message("Language changed to French")
-                        self.tui.update_status("Speaking...")
-                    
-                    await self._speak(response_text)
-                    
-                    if self.use_tui:
-                        self.tui.update_status("Ready")
-                    continue
-                
-                elif "switch to english" in lower_text or "parle anglais" in lower_text or "in english" in lower_text:
-                    self.stt.set_language("en")
-                    response_text = "Okay, switching to English."
-                    logger.info("Language switched to English")
-                    
-                    if self.use_tui:
-                        self.tui.update_language("en")
-                        self.tui.add_assistant_message(response_text)
-                        self.tui.add_system_message("Language changed to English")
-                        self.tui.update_status("Speaking...")
-                    
-                    await self._speak(response_text)
-                    
+                if await self.handle_language_switch(user_text):
                     if self.use_tui:
                         self.tui.update_status("Ready")
                     continue
@@ -400,10 +532,14 @@ class Jarvis:
                     
                 except Exception as e:
                     logger.error(f"Processing error: {e}")
-                    response_text = "I encountered an error processing your request."
+                    await self._speak("I encountered an error processing your request.")
                 
-                # Synthesize and speak response
-                await self._speak(response_text)
+                # The answer was spoken sentence by sentence as it arrived;
+                # wait for the tail before listening again - unless the user
+                # talks over it, which ends this turn and starts the next.
+                if self.use_tui:
+                    self.tui.update_status("Speaking...")
+                await self._finish_speaking()
                 
                 if self.use_tui:
                     self.tui.update_status("Ready")
@@ -420,6 +556,7 @@ class Jarvis:
     
     async def run_text_mode(self):
         """Run in text-only mode (no voice I/O)."""
+        self.speak_aloud = False
         await self.start()
         logger.info("\n" + "="*50)
         logger.info("Jarvis Voice Assistant - Text Mode")
@@ -438,6 +575,9 @@ class Jarvis:
                     if is_exit_command(user_text):
                         print("Jarvis: Goodbye!")
                         break
+
+                    if await self.handle_language_switch(user_text):
+                        continue
                     
                 except KeyboardInterrupt:
                     print("\n\nJarvis: Goodbye!")
@@ -445,8 +585,9 @@ class Jarvis:
                 
                 # Process
                 try:
-                    response_text = await self.process_user_input(user_text)
-                    print(f"\nJarvis: {response_text}")
+                    print("\nJarvis: ", end="", flush=True)
+                    await self.process_user_input(user_text)
+                    print()
                     
                 except Exception as e:
                     logger.error(f"Processing error: {e}")
@@ -459,53 +600,65 @@ class Jarvis:
             await self.aclose()
 
 
-def main():
-    """Main entry point."""
-    # Check command line arguments
-    mode = "voice"
-    use_tui = False
-    
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "--text":
-            mode = "text"
-        elif sys.argv[1] == "--tui":
-            mode = "voice"
-            use_tui = True
-        elif sys.argv[1] == "--help":
-            print("Jarvis Voice Assistant")
-            print("\nUsage:")
-            print("  python main.py          # Voice mode (default)")
-            print("  python main.py --tui    # Voice mode with Terminal UI")
-            print("  python main.py --text   # Text-only mode")
-            print("  python main.py --help   # Show this help")
-            return
-    
-    # Configure logging
-    logger.remove()  # Remove default handler
-    
-    # If using TUI, only log to file to avoid interfering with the UI
+def parse_arguments(argv=None):
+    """Read the command line.
+
+    argparse rather than a hand-rolled chain, so an unknown flag is an error
+    instead of being ignored: "--txt" used to start a voice session with the
+    microphone open, which is not what the user asked for.
+    """
+    parser = argparse.ArgumentParser(
+        prog="jarvis",
+        description="A local voice assistant.",
+    )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--text", action="store_true",
+        help="text-only mode, with no audio input or output",
+    )
+    mode.add_argument(
+        "--tui", action="store_true",
+        help="voice mode with the terminal interface",
+    )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="carry on from where the last conversation left off",
+    )
+    return parser.parse_args(argv)
+
+
+def configure_logging(use_tui: bool) -> None:
+    """Send logs somewhere that will not fight with the interface."""
+    logger.remove()
     if use_tui:
+        # The TUI owns the terminal; logs go to a file or they corrupt it.
         logger.add(
             "jarvis.log",
             format="{time:HH:mm:ss} | {level: <8} | {message}",
-            level=settings.log_level
+            level=settings.log_level,
         )
     else:
         logger.add(
             sys.stderr,
-            format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
-            level=settings.log_level
+            format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> "
+                   "| <level>{message}</level>",
+            level=settings.log_level,
         )
-    
-    # Create and run assistant
+
+
+def main():
+    """Main entry point."""
+    arguments = parse_arguments()
+    configure_logging(arguments.tui)
+
     try:
-        jarvis = Jarvis(use_tui=use_tui)
-        
-        if mode == "voice":
-            asyncio.run(jarvis.run_interactive())
-        else:
+        jarvis = Jarvis(use_tui=arguments.tui, resume=arguments.resume)
+
+        if arguments.text:
             asyncio.run(jarvis.run_text_mode())
-            
+        else:
+            asyncio.run(jarvis.run_interactive())
+
     except Exception as e:
         logger.error(f"Failed to start Jarvis: {e}")
         sys.exit(1)
