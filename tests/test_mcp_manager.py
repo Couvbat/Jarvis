@@ -8,13 +8,12 @@ protocol mistakes through.
 import asyncio
 import contextlib
 
-import pytest
 from mcp import ClientSession
 from mcp.client._memory import InMemoryTransport
 from mcp.server.mcpserver import MCPServer
 
-from tools.mcp.manager import McpManager, McpServer, ServerStatus, result_text
-from tools.mcp.servers import ServerConfig, Transport, Trust
+from jarvis.tools.mcp.manager import McpManager, McpServer, ServerStatus, result_text
+from jarvis.tools.mcp.servers import ServerConfig, Transport
 
 
 def build_server(name="probe"):
@@ -199,7 +198,7 @@ class TestLifecycleFailures:
             await asyncio.sleep(10)
 
         monkeypatch.setattr(
-            "tools.mcp.manager.ClientSessionGroup.connect_to_server", hang
+            "jarvis.tools.mcp.manager.ClientSessionGroup.connect_to_server", hang
         )
         assert await server.start() is False
         assert "did not connect" in server.error
@@ -217,7 +216,7 @@ class TestLifecycleFailures:
             await asyncio.sleep(30)
 
         monkeypatch.setattr(
-            "tools.mcp.manager.ClientSessionGroup.connect_to_server", hang
+            "jarvis.tools.mcp.manager.ClientSessionGroup.connect_to_server", hang
         )
         loop = asyncio.get_running_loop()
         started = loop.time()
@@ -244,8 +243,6 @@ class TestManager:
         good = self.config("good")
         bad = ServerConfig("bad", Transport.STDIO, command="definitely-not-real-xyz")
 
-        real_connect = None
-
         manager = McpManager([good, bad], connect_timeout=5.0)
 
         async def connect(self_group, params, session_params=None):
@@ -254,7 +251,7 @@ class TestManager:
             raise FileNotFoundError(params.command)
 
         monkeypatch.setattr(
-            "tools.mcp.manager.ClientSessionGroup.connect_to_server", connect
+            "jarvis.tools.mcp.manager.ClientSessionGroup.connect_to_server", connect
         )
         await manager.start()
 

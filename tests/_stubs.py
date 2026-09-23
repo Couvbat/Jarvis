@@ -14,10 +14,10 @@ these tests exist to catch.
 
 import sys
 import types
-from typing import Any, Callable, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
-
 
 # --------------------------------------------------------------------------- #
 # sounddevice
@@ -27,9 +27,9 @@ class FakeInputStream:
     """Replays a scripted list of int16 blocks, then silence forever."""
 
     #: blocks handed to the next stream instance, set by tests
-    scripted_blocks: List[np.ndarray] = []
+    scripted_blocks: list[np.ndarray] = []
     #: every stream instance created, for assertions on constructor kwargs
-    instances: List["FakeInputStream"] = []
+    instances: list["FakeInputStream"] = []
 
     def __init__(self, **kwargs: Any):
         self.kwargs = kwargs
@@ -45,7 +45,7 @@ class FakeInputStream:
         self.closed = True
         return False
 
-    def read(self, frames: int) -> Tuple[np.ndarray, bool]:
+    def read(self, frames: int) -> tuple[np.ndarray, bool]:
         self.read_calls += 1
         if self.blocks:
             block = self.blocks.pop(0)
@@ -59,9 +59,9 @@ class _SoundDeviceModule(types.ModuleType):
     def __init__(self) -> None:
         super().__init__("sounddevice")
         self.InputStream = FakeInputStream
-        self.played: List[Tuple[np.ndarray, int]] = []
+        self.played: list[tuple[np.ndarray, int]] = []
         self.wait_calls = 0
-        self.play_error: Optional[Exception] = None
+        self.play_error: Exception | None = None
 
     def play(self, data: np.ndarray, samplerate: int, **kwargs: Any) -> None:
         if self.play_error is not None:
@@ -151,10 +151,10 @@ class FakeWhisperModel:
     #: text the next transcribe() call splits into segments
     scripted_text: str = "hello world"
     #: raised by transcribe() when set
-    transcribe_error: Optional[Exception] = None
+    transcribe_error: Exception | None = None
     #: raised by the constructor when set
-    load_error: Optional[Exception] = None
-    instances: List["FakeWhisperModel"] = []
+    load_error: Exception | None = None
+    instances: list["FakeWhisperModel"] = []
 
     def __init__(self, model_size_or_path: str, device: str = "cpu",
                  compute_type: str = "default", **kwargs: Any):
@@ -164,7 +164,7 @@ class FakeWhisperModel:
         self.device = device
         self.compute_type = compute_type
         self.kwargs = kwargs
-        self.transcribe_calls: List[dict] = []
+        self.transcribe_calls: list[dict] = []
         FakeWhisperModel.instances.append(self)
 
     def transcribe(self, audio: Any, **kwargs: Any):
@@ -255,7 +255,7 @@ class ToolCall(SubscriptableModel):
     """A tool call as the real client returns it: mapping-like, not JSON-safe."""
 
 
-def make_chat_response(content: str = "", tool_calls: Optional[list] = None,
+def make_chat_response(content: str = "", tool_calls: list | None = None,
                        as_model: bool = True) -> Any:
     """Build a chat response in either the modern (model) or legacy (dict) shape."""
     message = {"content": content, "tool_calls": tool_calls or []}
@@ -264,7 +264,7 @@ def make_chat_response(content: str = "", tool_calls: Optional[list] = None,
     return SubscriptableModel(message=SubscriptableModel(**message))
 
 
-def make_tool_call(name: str, arguments: Optional[dict] = None,
+def make_tool_call(name: str, arguments: dict | None = None,
                    as_model: bool = True) -> Any:
     """Build a tool call in either the modern (model) or legacy (dict) shape."""
     if not as_model:
@@ -304,29 +304,80 @@ class _AsyncStream:
         )
 
 
+class StreamThenFail:
+    """A scripted response that streams part of an answer and then breaks.
+
+    A server that dies mid-generation is not the same failure as one that was
+    never there: some of the answer has already been spoken, and that cannot
+    be taken back by trying another provider.
+    """
+
+    def __init__(self, content: str, error: Exception):
+        self.content = content
+        self.error = error
+
+
+class _FailingStream:
+    """Yields ``response.content`` in slices, then raises."""
+
+    def __init__(self, failure: StreamThenFail, slice_size: int = 7):
+        self.failure = failure
+        self.slice_size = slice_size
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        content = self.failure.content
+        for start in range(0, len(content), self.slice_size):
+            yield SubscriptableModel(
+                message=SubscriptableModel(
+                    content=content[start:start + self.slice_size], tool_calls=[]
+                )
+            )
+        raise self.failure.error
+
+
 class _AsyncClient:
     """Stand-in for ``ollama.AsyncClient``.
 
     Records the host it was built with, so a test can check that the
-    configured OLLAMA_HOST actually reaches the client.
+    configured OLLAMA_HOST actually reaches the client.  Behaviour can be
+    scripted per host, because a pool of providers is only interesting when
+    one of them answers and another does not.
     """
 
-    def __init__(self, host: Optional[str] = None, **kwargs: Any):
+    def __init__(self, host: str | None = None, **kwargs: Any):
         self.host = host
         _OLLAMA_MODULE["instance"].hosts.append(host)
 
     async def chat(self, **kwargs: Any) -> Any:
-        response = _OLLAMA_MODULE["instance"].chat(**kwargs)
+        module = _OLLAMA_MODULE["instance"]
+        module.chat_hosts.append(self.host)
+
+        error = module.host_chat_errors.get(self.host)
+        if error is not None:
+            raise error
+
+        response = module.chat(**kwargs)
+        if isinstance(response, StreamThenFail):
+            return _FailingStream(response)
         if kwargs.get("stream"):
             return _AsyncStream(response)
         return response
 
     async def list(self) -> Any:
         module = _OLLAMA_MODULE["instance"]
-        if module.list_error is not None:
-            raise module.list_error
+        module.list_hosts.append(self.host)
+
+        error = module.host_list_errors.get(self.host, module.list_error)
+        if error is not None:
+            raise error
         return SubscriptableModel(
-            models=[SubscriptableModel(model=name) for name in module.models]
+            models=[
+                SubscriptableModel(model=name)
+                for name in module.host_models.get(self.host, module.models)
+            ]
         )
 
 
@@ -337,13 +388,21 @@ _OLLAMA_MODULE: dict = {}
 class _OllamaModule(types.ModuleType):
     def __init__(self) -> None:
         super().__init__("ollama")
-        self.calls: List[dict] = []
-        self.responses: List[Any] = []
-        self.hosts: List[Optional[str]] = []
-        self.error: Optional[Exception] = None
-        self.list_error: Optional[Exception] = None
-        self.models: List[str] = ["llama3.1:8b"]
+        self.calls: list[dict] = []
+        self.responses: list[Any] = []
+        self.hosts: list[str | None] = []
+        self.error: Exception | None = None
+        self.list_error: Exception | None = None
+        self.models: list[str] = ["llama3.1:8b"]
+        #: hosts a chat / list call was made against, in order
+        self.chat_hosts: list[str | None] = []
+        self.list_hosts: list[str | None] = []
+        #: per-host overrides, for pools where one provider is down
+        self.host_models: dict[str | None, list[str]] = {}
+        self.host_list_errors: dict[str | None, Exception] = {}
+        self.host_chat_errors: dict[str | None, Exception] = {}
         self.AsyncClient = _AsyncClient
+        self.StreamThenFail = StreamThenFail
         _OLLAMA_MODULE["instance"] = self
 
     def chat(self, **kwargs: Any) -> Any:
@@ -367,6 +426,11 @@ class _OllamaModule(types.ModuleType):
         self.calls.clear()
         self.responses.clear()
         self.hosts.clear()
+        self.chat_hosts.clear()
+        self.list_hosts.clear()
+        self.host_models.clear()
+        self.host_list_errors.clear()
+        self.host_chat_errors.clear()
         self.error = None
         self.list_error = None
         self.models = ["llama3.1:8b"]

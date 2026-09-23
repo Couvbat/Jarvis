@@ -13,14 +13,14 @@ from mcp.client._memory import InMemoryTransport
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
-from policy.engine import PolicyEngine, Surface
-from policy.store import ApprovalStore
-from policy.taint import TaintState
-from tools.mcp.adapter import build_specs, risk_for
-from tools.mcp.manager import McpServer, ServerStatus
-from tools.mcp.servers import ServerConfig, Transport, Trust
-from tools.registry import ToolRegistry
-from tools.schema import Risk
+from jarvis.policy.engine import PolicyEngine, Surface
+from jarvis.policy.store import ApprovalStore
+from jarvis.policy.taint import TaintState
+from jarvis.tools.mcp.adapter import build_specs, risk_for
+from jarvis.tools.mcp.manager import McpServer, ServerStatus
+from jarvis.tools.mcp.servers import ServerConfig, Transport, Trust
+from jarvis.tools.registry import ToolRegistry
+from jarvis.tools.schema import Risk
 
 
 class FakeAnnotations:
@@ -109,7 +109,7 @@ class StubServer:
         return self.config.name
 
     async def call(self, qualified_name, arguments):
-        from tools.schema import ToolResult
+        from jarvis.tools.schema import ToolResult
 
         self.calls.append((qualified_name, arguments))
         return ToolResult("from the server", untrusted=True)
@@ -240,7 +240,7 @@ class TestThroughPolicy:
 
     def test_an_mcp_call_is_escalated_once_the_turn_is_tainted(self, engine):
         """Every MCP tool is egress, so a tainted turn escalates it."""
-        from tools.schema import ToolResult
+        from jarvis.tools.schema import ToolResult
 
         spec = self.spec_for(annotated(read_only_hint=True), Trust.TRUSTED)
         assert engine.evaluate(spec, {}).is_automatic is True

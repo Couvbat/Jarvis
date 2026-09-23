@@ -17,17 +17,17 @@ fi
 echo "Activating virtual environment..."
 source venv/bin/activate
 
-# Install dependencies if needed
+# Install Jarvis if needed
 if [ ! -f "venv/.installed" ]; then
-    echo "Installing Python dependencies..."
-    pip install -r requirements.txt
+    echo "Installing Jarvis and its dependencies..."
+    pip install -e .
     touch venv/.installed
 fi
 
 # Check if Piper is installed
 if [ ! -f "piper/piper/piper" ]; then
     echo "Piper not found. Running setup..."
-    python setup_piper.py
+    jarvis-setup-piper
 fi
 
 # Check if .env exists
@@ -53,4 +53,4 @@ echo ""
 echo "Starting Jarvis..."
 echo "Modes: --tui (Terminal UI), --text (text-only)"
 echo ""
-python main.py "$@"
+jarvis "$@"

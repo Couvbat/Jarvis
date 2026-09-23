@@ -1,0 +1,26 @@
+{
+  "_comment": [
+    "Ordered LLM providers, most preferred first. Copy to llm_providers.json.",
+    "The first provider that answers and has its model pulled serves the turn,",
+    "and Jarvis goes back to a more preferred one as soon as it returns.",
+    "Only two providers? OLLAMA_FALLBACK_HOST in .env covers that without",
+    "this file. When this file exists it replaces those settings entirely.",
+    "A provider is skipped only for being unreachable or missing its model:",
+    "an answer that looks wrong is never a reason to swap models mid-sentence."
+  ],
+  "providers": [
+    {
+      "name": "nas",
+      "host": "http://nas.local:11434",
+      "model": "qwen3:32b",
+      "num_ctx": 32768
+    },
+    {
+      "name": "laptop",
+      "host": "http://localhost:11434",
+      "model": "llama3.2:3b",
+      "max_tools": 8,
+      "num_ctx": 8192
+    }
+  ]
+}

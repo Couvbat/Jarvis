@@ -2,10 +2,10 @@
 
 import pytest
 
-from text_utils import expand, normalise, strip_accents, tokenise
-from tools.registry import ToolRegistry
-from tools.schema import Risk, ToolResult, ToolSpec
-from tools.selection import ToolSelector, estimate_schema_tokens
+from jarvis.text_utils import expand, normalise, strip_accents, tokenise
+from jarvis.tools.registry import ToolRegistry
+from jarvis.tools.schema import Risk, ToolResult, ToolSpec
+from jarvis.tools.selection import ToolSelector, estimate_schema_tokens
 
 
 def make_spec(name, description="does something", properties=None):
@@ -70,6 +70,28 @@ class TestTextHelpers:
 
     def test_unknown_terms_pass_through(self):
         assert expand(["marie"]) == ["marie"]
+
+    def test_no_alias_is_shadowed_by_a_later_entry(self):
+        """"site" was listed twice and the second entry silently replaced the
+        first, so "ouvre le site X" stopped matching a tool described with
+        "url". A duplicate key in a dict literal is not an error; it is a quiet
+        loss, and the table is long enough that it will happen again."""
+        import ast
+        import inspect
+
+        import jarvis.text_utils as text_utils
+
+        assert "url" in text_utils.TERM_ALIASES["site"]
+
+        tree = ast.parse(inspect.getsource(text_utils))
+        literals = [
+            node.value for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and any(getattr(t, "id", None) == "TERM_ALIASES" for t in node.targets)
+        ]
+        keys = [key.value for key in literals[0].keys]
+        duplicates = {key for key in keys if keys.count(key) > 1}
+        assert not duplicates, f"these aliases shadow an earlier one: {duplicates}"
 
 
 class TestBelowTheThreshold:

@@ -2,15 +2,19 @@ line-length = 100
 target-version = "py310"
 
 [lint]
-# Error-level rules only, so the gate is meaningful on the code as it stands
-# today.  The wider style set (I, UP, W, and F401 on the application modules)
-# is enabled in the cleanup step of the implementation plan - `ruff check .`
-# with the default set currently reports ~430 style findings, almost all
-# trailing whitespace on blank lines.
-select = ["E9", "F63", "F7", "F82", "B"]
-ignore = [
-    "B904",  # exception chaining in tts_module - part of the cleanup step
-]
+# The full gate: errors, undefined names, whitespace, import order, and the
+# modernisation rules the 3.10 floor makes available. `B` catches the things
+# that read as bugs rather than style - a mutable default, an exception raised
+# inside an except block without chaining.
+select = ["E", "F", "W", "I", "UP", "B"]
 
 [lint.per-file-ignores]
+# Tests assert on comparisons deliberately.
 "tests/*" = ["B011"]
+
+# `ruff format` is deliberately not part of the gate. Running it reformats 54
+# files and 2500 lines, and its output is harder to read than what it replaces:
+# the alias tables in text_utils.py become one entry per line, and the scripted
+# tool-call literals in the tests become deeply nested. The linter is where the
+# defects were (a duplicate dict key, two unchained exceptions, a dead
+# assignment); the formatter would only have moved them around.

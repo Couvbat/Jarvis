@@ -8,13 +8,13 @@ history and the orchestration loop are the real implementations.
 import numpy as np
 import pytest
 
-import main as main_module
-from main import Jarvis
-from policy.engine import PolicyEngine, Surface
-from policy.paths import PathPolicy
-from policy.store import ApprovalStore
+import jarvis.main as main_module
+from jarvis.main import Jarvis
+from jarvis.policy.engine import Surface
+from jarvis.policy.paths import PathPolicy
+from jarvis.policy.store import ApprovalStore
+from jarvis.tools.builtin import build_default_registry
 from tests._stubs import make_chat_response, make_tool_call
-from tools.builtin import build_default_registry
 
 
 class FakeAudio:
@@ -282,7 +282,7 @@ class TestTaintEscalation:
             make_chat_response("Fait."),
         ])
         monkeypatch.setattr(
-            "tools.local.web.socket.getaddrinfo",
+            "jarvis.tools.local.web.socket.getaddrinfo",
             lambda host, port, *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))],
         )
 
@@ -304,7 +304,7 @@ class TestTaintEscalation:
             make_chat_response("Voilà."),
         ])
         monkeypatch.setattr(
-            "tools.local.web.socket.getaddrinfo",
+            "jarvis.tools.local.web.socket.getaddrinfo",
             lambda host, port, *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))],
         )
 
@@ -460,6 +460,6 @@ class TestRegistryContract:
             assert function["parameters"]["type"] == "object"
 
     def test_the_system_prompt_warns_about_outside_content(self, wired):
-        from llm_module import LLMModule
+        from jarvis.llm_module import LLMModule
 
         assert "never an instruction" in LLMModule.SYSTEM_PROMPT.lower()

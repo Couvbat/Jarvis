@@ -1,5 +1,6 @@
 """Pytest configuration: dependency stubs, environment isolation, fixtures."""
 
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -7,7 +8,13 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT))
+
+# An installed copy wins, so `pip install -e .` really is what gets tested.
+# Falling back to src/ keeps `pytest` working in a bare checkout, which
+# matters here more than usual: the project's own dependencies need PortAudio
+# and a C toolchain, and the suite deliberately needs neither.
+if importlib.util.find_spec("jarvis") is None:
+    sys.path.insert(0, str(REPO_ROOT / "src"))
 
 # --------------------------------------------------------------------------- #
 # Environment isolation.
@@ -64,11 +71,18 @@ def isolated_state(tmp_path_factory, monkeypatch):
     DATA_DIR decides where those databases live, and a test that forgets to
     stub a store would otherwise write into the developer's own state.
     """
-    from config import settings as _settings
+    from jarvis.config import settings as _settings
 
     directory = tmp_path_factory.mktemp("jarvis-state")
     monkeypatch.setenv("DATA_DIR", str(directory))
     monkeypatch.setattr(_settings, "data_dir", str(directory), raising=False)
+    # A developer's own llm_providers.json sits in the repo root, which is the
+    # working directory here; point the default somewhere that does not exist
+    # so provider tests see the settings, not that file.
+    monkeypatch.setattr(
+        _settings, "llm_providers_path", str(directory / "llm_providers.json"),
+        raising=False,
+    )
     return directory
 
 
@@ -107,7 +121,7 @@ def fake_ollama():
 @pytest.fixture
 def settings(monkeypatch):
     """The global settings singleton, safe to mutate for the test's duration."""
-    from config import settings as _settings
+    from jarvis.config import settings as _settings
 
     original = {key: getattr(_settings, key) for key in type(_settings).model_fields}
     yield _settings

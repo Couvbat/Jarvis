@@ -5,8 +5,8 @@ import asyncio
 import numpy as np
 import pytest
 
-from speech.chunker import SentenceChunker
-from speech.pipeline import SpeechPipeline
+from jarvis.speech.chunker import SentenceChunker
+from jarvis.speech.pipeline import SpeechPipeline
 
 
 def stream(text, size=7):

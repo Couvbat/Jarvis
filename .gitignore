@@ -15,6 +15,12 @@ ENV/
 # Local state
 command_whitelist.json
 mcp_servers.json
+llm_providers.json
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
 
 # Test and tooling artifacts
 .pytest_cache/

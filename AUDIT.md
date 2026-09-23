@@ -8,7 +8,8 @@ et la documentation. Chaque anomalie porte un identifiant `BUG-xx` repris
 verbatim dans la suite de tests (`tests/`), sous forme de test `xfail(strict)`
 qui passera au vert le jour où le correctif est appliqué.
 
-> **Statut au 15 septembre 2026 — Phases 0 à 3 du plan livrées.**
+> **Statut au 16 septembre 2026 — Phases 0 à 4 du plan livrées, plus les
+> fournisseurs LLM ordonnés (Phase 3.5, hors plan).**
 > **Les 34 anomalies de ce rapport sont corrigées et vérifiées par tests.**
 > Il ne reste aucun marqueur `xfail`.
 > Les trois anomalies bloquantes de la §2 et les quatre failles de la §3 sont

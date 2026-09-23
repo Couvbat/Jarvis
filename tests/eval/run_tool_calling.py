@@ -24,12 +24,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
-from policy.paths import PathPolicy  # noqa: E402
+from jarvis.policy.paths import PathPolicy  # noqa: E402
+from jarvis.tools.local import apps, filesystem, web  # noqa: E402
+from jarvis.tools.registry import ToolRegistry  # noqa: E402
+from jarvis.tools.schema import Risk, ToolResult, ToolSpec  # noqa: E402
+from jarvis.tools.selection import ToolSelector, estimate_schema_tokens  # noqa: E402
 from tests.eval.cases import CASES, EXTRA_TOOLS  # noqa: E402
-from tools.local import apps, filesystem, web  # noqa: E402
-from tools.registry import ToolRegistry  # noqa: E402
-from tools.schema import Risk, ToolResult, ToolSpec  # noqa: E402
-from tools.selection import ToolSelector, estimate_schema_tokens  # noqa: E402
 
 
 def build_registry(with_extras: bool = True) -> ToolRegistry:
@@ -52,7 +52,7 @@ def build_registry(with_extras: bool = True) -> ToolRegistry:
 async def run(model: str, host: str, all_tools: bool, num_ctx: int, verbose: bool):
     import ollama
 
-    from llm_module import LLMModule
+    from jarvis.llm_module import LLMModule
 
     registry = build_registry()
     selector = ToolSelector(
