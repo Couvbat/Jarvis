@@ -1,6 +1,7 @@
 """LLM module with Ollama integration and function calling."""
 
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from typing import Any
 
 from loguru import logger
@@ -157,6 +158,11 @@ Answers are spoken aloud, so keep them short and plain. Respond in the
 language the user is speaking: French if they speak French, English if they
 speak English."""
 
+    #: Appended to the prompt, refreshed each turn. Without it the model has
+    #: no way to turn "tomorrow at nine" into a time, and a session left
+    #: running overnight would answer with yesterday's date.
+    CLOCK_PROMPT = "The current local date and time is {now:%A %d %B %Y, %H:%M}."
+
     #: Safety net against a local model that keeps asking for tools forever.
     MAX_TOOL_ITERATIONS = 5
 
@@ -205,6 +211,18 @@ speak English."""
     def model(self) -> str:
         provider = self.provider
         return provider.model if provider is not None else ""
+
+    def refresh_clock(self) -> None:
+        """Put the current time in the prompt, before each turn.
+
+        A constant would be wrong within hours: "tomorrow at nine" needs to
+        know what today is, and a session left running overnight would
+        otherwise schedule things into the past.
+        """
+        self.history.set_system(
+            f"{self.SYSTEM_PROMPT}\n\n"
+            f"{self.CLOCK_PROMPT.format(now=datetime.now().astimezone())}"
+        )
 
     def _record(self, message: dict[str, Any]) -> None:
         """Write a turn to the conversation log, if one is being kept."""
@@ -282,6 +300,7 @@ speak English."""
         """
         logger.info(f"User: {user_message}")
         self._last_utterance = user_message
+        self.refresh_clock()
         self.history.add_user(user_message)
         return await self._generate(on_text)
 

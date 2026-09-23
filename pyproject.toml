@@ -52,6 +52,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Hands-free activation. Optional because it pulls in onnxruntime and
+# tflite-runtime, whose wheels are not available everywhere, and because
+# typing at Jarvis is a legitimate way to use it.
+wakeword = ["openwakeword>=0.6,<1"]
 # Everything the suite needs and nothing native: the stubs in tests/_stubs.py
 # stand in for sounddevice, webrtcvad, faster-whisper and ollama, so CI needs
 # no PortAudio, no C toolchain and no model downloads.
@@ -71,6 +75,8 @@ Issues = "https://github.com/Couvbat/Jarvis/issues"
 [project.scripts]
 jarvis = "jarvis.__main__:main"
 jarvis-setup-piper = "jarvis.setup_piper:main"
+jarvis-index = "jarvis.rag.indexer:main"
+jarvis-mcp = "jarvis.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -55,11 +55,19 @@ class FakeManager:
 
 
 class TestBuiltInRegistry:
-    def test_the_three_local_providers_are_registered(self, settings, tmp_path):
+    def test_the_local_providers_are_registered(self, settings, tmp_path):
         settings.allowed_directories = str(tmp_path)
         registry = build_default_registry()
         namespaces = {name.split("__")[0] for name in registry.names()}
-        assert namespaces == {"fs", "web", "app"}
+        assert namespaces == {"fs", "web", "app", "remind"}
+
+    def test_reminders_can_be_turned_off(self, settings, tmp_path):
+        """They cost nothing but three tools; someone who does not want them
+        should not be offered them."""
+        settings.allowed_directories = str(tmp_path)
+        settings.reminders = False
+        registry = build_default_registry()
+        assert not any(name.startswith("remind__") for name in registry.names())
 
     def test_the_sandbox_can_be_supplied(self, tmp_path):
         registry = build_default_registry(PathPolicy([tmp_path]))

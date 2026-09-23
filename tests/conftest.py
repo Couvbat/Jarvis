@@ -87,6 +87,14 @@ def isolated_state(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture
+def document_store(tmp_path):
+    """An empty document index, isolated from the user's own."""
+    from jarvis.rag.store import DocumentStore
+
+    return DocumentStore(tmp_path / "documents.db")
+
+
+@pytest.fixture
 def clean_env(monkeypatch):
     """Remove every Jarvis env var so ``Settings()`` shows its declared defaults."""
     for key in _TEST_ENV:

@@ -194,6 +194,26 @@ class TestPlayback:
         handler.play_audio(np.zeros(1000, dtype=np.int16))
         assert fake_sd.wait_calls == 1
 
+    def test_playback_can_be_cut_short(self, handler, fake_sd, monkeypatch):
+        """Barge-in reaches this through the pipeline, so the real method was
+        never exercised by the suite."""
+        stops = []
+        monkeypatch.setattr(fake_sd, "stop", lambda: stops.append(True),
+                            raising=False)
+        handler.stop_playback()
+        assert stops == [True]
+
+    def test_a_backend_that_will_not_stop_is_survived(
+        self, handler, fake_sd, monkeypatch
+    ):
+        """An interruption that raises would take down the turn it was meant
+        to shorten."""
+        def refuse():
+            raise RuntimeError("no stream to stop")
+
+        monkeypatch.setattr(fake_sd, "stop", refuse, raising=False)
+        handler.stop_playback()
+
     def test_playback_errors_propagate(self, handler, fake_sd):
         fake_sd.play_error = OSError("device busy")
         with pytest.raises(OSError, match="device busy"):

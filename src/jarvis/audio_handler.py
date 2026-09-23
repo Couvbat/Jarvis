@@ -68,6 +68,79 @@ class AudioHandler:
             self.vad_frame_samples = None
             return True
 
+    def wait_for_wake(
+        self,
+        detector,
+        tail: float = 0.5,
+        poll: float = 0.25,
+        should_stop=None,
+    ) -> np.ndarray:
+        """Listen until the wake phrase is heard, and return what followed it.
+
+        Args:
+            detector: anything with ``feed(mono) -> bool`` and ``reset()``
+            tail: seconds to keep listening after the phrase, so a command
+                spoken in the same breath is not lost. The stream is reopened
+                for the recording that follows, so this is what bridges the
+                gap - without it, "hey Jarvis quelle heure" loses "quelle".
+            poll: how often to check ``should_stop``, in seconds
+            should_stop: called between blocks; listening ends when it returns
+                True. Without it this waits forever, which is correct for a
+                voice loop and wrong for a test.
+
+        Returns:
+            The audio captured after the phrase, mono int16. Empty when
+            listening was stopped rather than triggered.
+        """
+        logger.info("Waiting for the wake word...")
+        detector.reset()
+
+        collected: list[np.ndarray] = []
+        triggered = False
+        tail_samples = int(tail * self.sample_rate)
+        collected_samples = 0
+        # A bound on how long one listening session runs without the caller
+        # getting a say, expressed in blocks rather than seconds so it holds
+        # whatever the block size is.
+        blocks_per_poll = max(1, int(poll * self.sample_rate / self.chunk_size))
+
+        try:
+            with sd.InputStream(
+                samplerate=self.sample_rate,
+                channels=self.channels,
+                dtype='int16',
+                blocksize=self.chunk_size,
+                device=self.input_device,
+            ) as stream:
+                while True:
+                    for _ in range(blocks_per_poll):
+                        block, _ = stream.read(self.chunk_size)
+                        mono = self._to_mono(block)
+
+                        if triggered:
+                            collected.append(mono)
+                            collected_samples += len(mono)
+                            continue
+
+                        if detector.feed(mono):
+                            logger.info("Wake word heard")
+                            triggered = True
+
+                    if triggered and collected_samples >= tail_samples:
+                        break
+                    if not triggered and should_stop is not None and should_stop():
+                        logger.info("Stopped waiting for the wake word")
+                        return np.array([], dtype=np.int16)
+
+        except Exception as e:
+            logger.error(f"Wake word listening error: {e}")
+            raise
+
+        return (
+            np.concatenate(collected) if collected
+            else np.array([], dtype=np.int16)
+        )
+
     def record_until_silence(
         self,
         silence_threshold: float = 1.0,
