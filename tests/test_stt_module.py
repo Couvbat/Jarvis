@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from stt_module import STTModule
+from jarvis.stt_module import STTModule
 from tests._stubs import FakeWhisperModel
 
 

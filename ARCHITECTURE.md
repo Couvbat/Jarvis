@@ -47,6 +47,14 @@ qu'il configure, et les URL qu'il approuve.
 
 ## 2. Découpage des modules
 
+> **Où on en est.** Le paquet `src/jarvis/` et le point d'entrée `jarvis`
+> existent (Phase 4). Le découpage interne ci-dessous, lui, reste une cible :
+> `audio/`, `stt/`, `tts/` et `llm/` sont pour l'instant les modules plats
+> `audio_handler.py`, `stt_module.py`, `tts_module.py`, `llm_module.py` et
+> `llm_providers.py`. `tools/`, `policy/` et `speech/` sont en place. Le
+> renommage n'apporte rien tant qu'un module tient dans un fichier ; il se
+> fera quand l'un d'eux cessera d'y tenir.
+
 ```
 src/jarvis/
 ├── __main__.py           point d'entrée, CLI

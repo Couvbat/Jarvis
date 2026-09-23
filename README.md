@@ -61,20 +61,23 @@ sudo pacman -S portaudio python-pyaudio ffmpeg
 python3 -m venv venv
 source venv/bin/activate
 
-# Install Python dependencies
-pip install -r requirements.txt
+# Install Jarvis and its dependencies
+pip install -e .
 ```
+
+That puts two commands on the PATH: `jarvis` and `jarvis-setup-piper`. Add
+the development extras with `pip install -e ".[dev]"`.
 
 ### 4. Install Piper TTS
 
 ```bash
 # English voice (default)
-python setup_piper.py
+jarvis-setup-piper
 
 # French voice - WHISPER_LANGUAGE defaults to fr, so you probably want this
-python setup_piper.py --voice fr_FR-siwis-medium
+jarvis-setup-piper --voice fr_FR-siwis-medium
 
-python setup_piper.py --list-voices
+jarvis-setup-piper --list-voices
 ```
 
 Downloads are checked against pinned SHA-256 digests before anything is
@@ -119,7 +122,7 @@ Key settings to configure:
 ### Voice Mode (Default)
 
 ```bash
-python main.py
+jarvis
 ```
 
 Speak naturally after the "Listening..." prompt. The assistant will:
@@ -134,7 +137,7 @@ Speak naturally after the "Listening..." prompt. The assistant will:
 For a rich terminal interface showing chat history and actions:
 
 ```bash
-python main.py --tui
+jarvis --tui
 ```
 
 The TUI displays:
@@ -148,7 +151,7 @@ The TUI displays:
 For testing without audio I/O:
 
 ```bash
-python main.py --text
+jarvis --text
 ```
 
 ### Example Commands
@@ -266,36 +269,40 @@ When `llm_providers.json` exists it replaces the `OLLAMA_*` settings above.
 
 ```
 Jarvis/
-├── main.py                 # Main orchestration loop
-├── config.py              # Configuration management
-├── audio_handler.py       # Audio I/O and VAD
-├── stt_module.py          # Speech-to-text (Whisper)
-├── llm_module.py          # LLM integration (Ollama)
-├── llm_providers.py       # Ordered providers, probing and failover
-├── tts_module.py          # Text-to-speech (Piper)
-├── tui.py                 # Rich terminal interface
-├── text_utils.py          # Shared normalisation and tokenisation
-├── tools/                 # Tool layer
-│   ├── schema.py          #   tool specs, risk levels, MCP conversion
-│   ├── registry.py        #   registration and dispatch
-│   ├── selection.py       #   which tools to offer this turn
-│   ├── builtin.py         #   assembling the built-in tools
-│   ├── local/             #   filesystem (CRUD), web, applications
-│   └── mcp/               #   MCP client: config, connections, adapter
-├── policy/                # What a tool call is allowed to do
-│   ├── paths.py           #   sandbox and denied patterns
-│   ├── engine.py          #   auto / confirm / refuse decisions
-│   ├── taint.py           #   untrusted-content tracking
-│   └── store.py           #   persistent approvals (SQLite)
-├── setup_piper.py         # Piper installation script
-├── tests/                 # Test suite (see tests/README.md)
-├── requirements.txt       # Python dependencies
-├── requirements-dev.txt   # Development dependencies
-├── requirements-test.txt  # Test-only dependencies (no native deps)
-├── .env.example          # Example configuration
+├── src/jarvis/                 # The package
+│   ├── __main__.py             #   `python -m jarvis`, and the `jarvis` command
+│   ├── main.py                 #   orchestration loop, CLI, confirmation surface
+│   ├── config.py               #   configuration (pydantic-settings)
+│   ├── audio_handler.py        #   audio I/O and VAD
+│   ├── stt_module.py           #   speech-to-text (Whisper)
+│   ├── llm_module.py           #   conversation, streaming, tool-call loop
+│   ├── llm_providers.py        #   ordered providers, probing and failover
+│   ├── tts_module.py           #   text-to-speech (Piper)
+│   ├── tui.py                  #   Rich terminal interface
+│   ├── text_utils.py           #   shared normalisation and tokenisation
+│   ├── conversation_store.py   #   conversation history (SQLite)
+│   ├── setup_piper.py          #   Piper installer (`jarvis-setup-piper`)
+│   ├── speech/                 #   sentence chunking, TTS queue, barge-in
+│   ├── tools/                  # Tool layer
+│   │   ├── schema.py           #   tool specs, risk levels, MCP conversion
+│   │   ├── registry.py         #   registration and dispatch
+│   │   ├── selection.py        #   which tools to offer this turn
+│   │   ├── builtin.py          #   assembling the built-in tools
+│   │   ├── local/              #   filesystem (CRUD), web, applications
+│   │   └── mcp/                #   MCP client: config, connections, adapter
+│   └── policy/                 # What a tool call is allowed to do
+│       ├── paths.py            #   sandbox and denied patterns
+│       ├── engine.py           #   auto / confirm / refuse decisions
+│       ├── taint.py            #   untrusted-content tracking
+│       └── store.py            #   persistent approvals (SQLite)
+├── tests/                      # Test suite (see tests/README.md)
+├── pyproject.toml              # Package metadata, dependencies, entry points
+├── requirements-test.txt       # Test-only dependencies (no native deps)
+├── .env.example                # Example configuration
 ├── llm_providers.example.json  # Example provider list (optional)
-├── .env                  # Your configuration (create this)
-└── piper/                # Piper binary and models (created by setup)
+├── mcp_servers.example.json    # Example MCP server list (optional)
+├── .env                        # Your configuration (create this)
+└── piper/                      # Piper binary and models (created by setup)
 ```
 
 ## Troubleshooting
@@ -360,7 +367,7 @@ answer its model listing looks unreachable; raise `LLM_PROBE_TIMEOUT`.
 **Binary not found:**
 ```bash
 # Re-run setup
-python setup_piper.py
+jarvis-setup-piper
 
 # Or set explicit path in tts_module.py
 ```
@@ -474,6 +481,15 @@ The suite stubs every native and network dependency (`sounddevice`,
 about a second. MCP tests drive a real server over the SDK's in-memory
 transport. See [tests/README.md](tests/README.md).
 
+`requirements-test.txt` is deliberately not the `[test]` extra: installing
+Jarvis itself pulls in the four packages the suite stubs, and the point is to
+need none of them. With Jarvis installed (`pip install -e .`) the suite runs
+against the installed package; from a bare checkout it falls back to `src/`.
+
+For the checks the suite cannot make - real transcription quality, a physical
+microphone, measured latency, a remote Ollama, third-party MCP servers - see
+[TESTING.md](TESTING.md).
+
 ### Connecting MCP servers
 
 Copy [mcp_servers.example.json](mcp_servers.example.json) to
@@ -522,7 +538,10 @@ Contributions are welcome! Areas for improvement:
 
 ## License
 
-This project is open source and available under the MIT License.
+MIT - see [`LICENSE`](LICENSE).
+
+Jarvis bundles nothing: Piper, its voices, the Whisper weights and the models
+Ollama serves are downloaded separately and carry their own licences.
 
 ## Acknowledgments
 

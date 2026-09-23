@@ -1,13 +1,12 @@
 """Tests for assembling the tool set (tools/builtin.py)."""
 
-import pytest
 
-from policy.paths import PathPolicy
-from tools.builtin import attach_mcp_tools, build_default_registry, build_mcp_manager
-from tools.mcp.manager import McpManager, ServerStatus
-from tools.mcp.servers import ServerConfig, Transport, Trust
-from tools.registry import ToolRegistry
-from tools.schema import Risk, ToolResult, ToolSpec
+from jarvis.policy.paths import PathPolicy
+from jarvis.tools.builtin import attach_mcp_tools, build_default_registry, build_mcp_manager
+from jarvis.tools.mcp.manager import McpManager, ServerStatus
+from jarvis.tools.mcp.servers import ServerConfig, Transport, Trust
+from jarvis.tools.registry import ToolRegistry
+from jarvis.tools.schema import Risk, ToolResult, ToolSpec
 
 
 class FakeMcpServer:

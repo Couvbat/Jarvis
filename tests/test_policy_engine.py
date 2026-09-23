@@ -2,10 +2,10 @@
 
 import pytest
 
-from policy.engine import Decision, PolicyEngine, Surface, summarise
-from policy.store import ApprovalStore
-from policy.taint import TaintState
-from tools.schema import Risk, ToolResult, ToolSpec
+from jarvis.policy.engine import Decision, PolicyEngine, Surface, summarise
+from jarvis.policy.store import ApprovalStore
+from jarvis.policy.taint import TaintState
+from jarvis.tools.schema import Risk, ToolResult, ToolSpec
 
 
 def make_spec(name="fs__write", risk=Risk.WRITE, **overrides):

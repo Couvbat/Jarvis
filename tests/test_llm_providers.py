@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from llm_providers import (
+from jarvis.llm_providers import (
     ProviderConfig,
     ProviderPool,
     ProviderState,

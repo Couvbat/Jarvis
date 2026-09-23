@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from config import Settings, settings
+from jarvis.config import Settings, settings
 
 
 class TestDefaults:

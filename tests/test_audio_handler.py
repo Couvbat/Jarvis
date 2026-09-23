@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from audio_handler import AudioHandler
+from jarvis.audio_handler import AudioHandler
 from tests._stubs import FakeInputStream, FakeVad
 
 

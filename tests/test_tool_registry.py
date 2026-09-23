@@ -2,8 +2,8 @@
 
 import pytest
 
-from tools.registry import DuplicateToolError, ToolRegistry
-from tools.schema import Risk, ToolResult, ToolSpec
+from jarvis.tools.registry import DuplicateToolError, ToolRegistry
+from jarvis.tools.schema import Risk, ToolResult, ToolSpec
 
 
 def make_spec(name="fs__read", handler=None, **overrides):
@@ -180,7 +180,6 @@ class TestAsyncHandlers:
     async def test_a_blocking_handler_does_not_stall_the_loop(self, registry):
         """Local tools block on files, subprocesses and HTTP; they must run
         off the event loop so Phase 3's barge-in can still be heard."""
-        import asyncio
         import threading
 
         loop_thread = threading.get_ident()

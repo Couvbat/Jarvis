@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from policy.paths import PathPolicy
-from tools.local import filesystem
-from tools.local.filesystem import FilesystemTools, build_tools
-from tools.registry import ToolRegistry
-from tools.schema import Risk
+from jarvis.policy.paths import PathPolicy
+from jarvis.tools.local import filesystem
+from jarvis.tools.local.filesystem import FilesystemTools, build_tools
+from jarvis.tools.registry import ToolRegistry
+from jarvis.tools.schema import Risk
 
 
 @pytest.fixture

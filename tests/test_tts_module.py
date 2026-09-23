@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-import tts_module
-from tts_module import TTSModule
+import jarvis.tts_module as tts_module
+from jarvis.tts_module import TTSModule
 
 
 class FakeCompleted:

@@ -2,9 +2,7 @@
 
 import json
 
-import pytest
-
-from tools.mcp.servers import ServerConfig, Transport, Trust, load_servers
+from jarvis.tools.mcp.servers import ServerConfig, Transport, Trust, load_servers
 
 
 def write_config(tmp_path, servers):

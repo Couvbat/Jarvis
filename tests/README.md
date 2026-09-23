@@ -2,12 +2,19 @@
 
 ```bash
 pip install -r ../requirements-test.txt
-pytest                                  # ~1,2 s
+pytest                                  # ~7 s
 pytest --cov --cov-report=term-missing
 pytest tests/test_llm_module.py -v      # un module
-pytest -k "whitelist"                   # par mot-clé
+pytest -k "provider"                    # par mot-clé
 pytest -rx                              # détail des xfail (= bugs connus)
 ```
+
+Le paquet vit sous `src/jarvis/`. Une copie installée (`pip install -e .`)
+l'emporte, pour que ce soit bien le paquet qui soit testé ; sinon `conftest.py`
+ajoute `src/` au chemin, de sorte que `pytest` fonctionne dans un dépôt
+fraîchement cloné — ce qui compte ici plus qu'ailleurs, puisque les vraies
+dépendances de Jarvis exigent PortAudio et un compilateur C, et que la suite
+n'a besoin ni de l'un ni de l'autre.
 
 ## Aucune dépendance native requise
 
@@ -52,6 +59,13 @@ mécanisme reste la façon d'enregistrer un bug nouvellement trouvé.
 | `approve_all` / `approve_and_remember` / `deny_all` | Rappels de confirmation, avec journal des appels |
 | `fake_sd` / `fake_vad` / `fake_whisper` / `fake_ollama` | Les modules doublures, réinitialisés entre chaque test |
 | `clean_env` | Retire toutes les variables Jarvis pour observer les défauts déclarés |
+
+## Ce que la suite ne couvre pas
+
+Qualité réelle de transcription, intelligibilité de la voix, latence mesurée,
+micro physique, vrai serveur Ollama (local ou distant), vrais serveurs MCP
+tiers, barge-in au casque. Tout cela suppose du matériel ou des poids de
+modèles : voir [`../TESTING.md`](../TESTING.md).
 
 ## Conventions
 

@@ -14,10 +14,10 @@ these tests exist to catch.
 
 import sys
 import types
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
-
 
 # --------------------------------------------------------------------------- #
 # sounddevice
@@ -27,9 +27,9 @@ class FakeInputStream:
     """Replays a scripted list of int16 blocks, then silence forever."""
 
     #: blocks handed to the next stream instance, set by tests
-    scripted_blocks: List[np.ndarray] = []
+    scripted_blocks: list[np.ndarray] = []
     #: every stream instance created, for assertions on constructor kwargs
-    instances: List["FakeInputStream"] = []
+    instances: list["FakeInputStream"] = []
 
     def __init__(self, **kwargs: Any):
         self.kwargs = kwargs
@@ -45,7 +45,7 @@ class FakeInputStream:
         self.closed = True
         return False
 
-    def read(self, frames: int) -> Tuple[np.ndarray, bool]:
+    def read(self, frames: int) -> tuple[np.ndarray, bool]:
         self.read_calls += 1
         if self.blocks:
             block = self.blocks.pop(0)
@@ -59,9 +59,9 @@ class _SoundDeviceModule(types.ModuleType):
     def __init__(self) -> None:
         super().__init__("sounddevice")
         self.InputStream = FakeInputStream
-        self.played: List[Tuple[np.ndarray, int]] = []
+        self.played: list[tuple[np.ndarray, int]] = []
         self.wait_calls = 0
-        self.play_error: Optional[Exception] = None
+        self.play_error: Exception | None = None
 
     def play(self, data: np.ndarray, samplerate: int, **kwargs: Any) -> None:
         if self.play_error is not None:
@@ -151,10 +151,10 @@ class FakeWhisperModel:
     #: text the next transcribe() call splits into segments
     scripted_text: str = "hello world"
     #: raised by transcribe() when set
-    transcribe_error: Optional[Exception] = None
+    transcribe_error: Exception | None = None
     #: raised by the constructor when set
-    load_error: Optional[Exception] = None
-    instances: List["FakeWhisperModel"] = []
+    load_error: Exception | None = None
+    instances: list["FakeWhisperModel"] = []
 
     def __init__(self, model_size_or_path: str, device: str = "cpu",
                  compute_type: str = "default", **kwargs: Any):
@@ -164,7 +164,7 @@ class FakeWhisperModel:
         self.device = device
         self.compute_type = compute_type
         self.kwargs = kwargs
-        self.transcribe_calls: List[dict] = []
+        self.transcribe_calls: list[dict] = []
         FakeWhisperModel.instances.append(self)
 
     def transcribe(self, audio: Any, **kwargs: Any):
@@ -255,7 +255,7 @@ class ToolCall(SubscriptableModel):
     """A tool call as the real client returns it: mapping-like, not JSON-safe."""
 
 
-def make_chat_response(content: str = "", tool_calls: Optional[list] = None,
+def make_chat_response(content: str = "", tool_calls: list | None = None,
                        as_model: bool = True) -> Any:
     """Build a chat response in either the modern (model) or legacy (dict) shape."""
     message = {"content": content, "tool_calls": tool_calls or []}
@@ -264,7 +264,7 @@ def make_chat_response(content: str = "", tool_calls: Optional[list] = None,
     return SubscriptableModel(message=SubscriptableModel(**message))
 
 
-def make_tool_call(name: str, arguments: Optional[dict] = None,
+def make_tool_call(name: str, arguments: dict | None = None,
                    as_model: bool = True) -> Any:
     """Build a tool call in either the modern (model) or legacy (dict) shape."""
     if not as_model:
@@ -347,7 +347,7 @@ class _AsyncClient:
     one of them answers and another does not.
     """
 
-    def __init__(self, host: Optional[str] = None, **kwargs: Any):
+    def __init__(self, host: str | None = None, **kwargs: Any):
         self.host = host
         _OLLAMA_MODULE["instance"].hosts.append(host)
 
@@ -388,19 +388,19 @@ _OLLAMA_MODULE: dict = {}
 class _OllamaModule(types.ModuleType):
     def __init__(self) -> None:
         super().__init__("ollama")
-        self.calls: List[dict] = []
-        self.responses: List[Any] = []
-        self.hosts: List[Optional[str]] = []
-        self.error: Optional[Exception] = None
-        self.list_error: Optional[Exception] = None
-        self.models: List[str] = ["llama3.1:8b"]
+        self.calls: list[dict] = []
+        self.responses: list[Any] = []
+        self.hosts: list[str | None] = []
+        self.error: Exception | None = None
+        self.list_error: Exception | None = None
+        self.models: list[str] = ["llama3.1:8b"]
         #: hosts a chat / list call was made against, in order
-        self.chat_hosts: List[Optional[str]] = []
-        self.list_hosts: List[Optional[str]] = []
+        self.chat_hosts: list[str | None] = []
+        self.list_hosts: list[str | None] = []
         #: per-host overrides, for pools where one provider is down
-        self.host_models: Dict[Optional[str], List[str]] = {}
-        self.host_list_errors: Dict[Optional[str], Exception] = {}
-        self.host_chat_errors: Dict[Optional[str], Exception] = {}
+        self.host_models: dict[str | None, list[str]] = {}
+        self.host_list_errors: dict[str | None, Exception] = {}
+        self.host_chat_errors: dict[str | None, Exception] = {}
         self.AsyncClient = _AsyncClient
         self.StreamThenFail = StreamThenFail
         _OLLAMA_MODULE["instance"] = self

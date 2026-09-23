@@ -4,6 +4,11 @@
 fichiers, connexion MCP à des services externes.
 Architecture visée : [`ARCHITECTURE.md`](ARCHITECTURE.md).
 État actuel : [`AUDIT.md`](AUDIT.md).
+Campagne manuelle : [`TESTING.md`](TESTING.md).
+
+> **Phases 0 à 4 livrées.** 1025 tests passants, 0 `xfail`, 96 % de
+> couverture. Il reste la Phase 5, qui est un choix de fonctionnalités, pas
+> une dette.
 
 **Règle de sortie de chaque tâche** : le ou les tests `xfail(strict)`
 correspondants passent au vert. Un `xfail` strict qui réussit fait échouer
@@ -250,7 +255,7 @@ faire deux fois.
   qui ne répond pas ne doit pas empêcher Jarvis de fonctionner avec les
   autres. Démarrage en parallèle avec délai d'attente, journalisation claire,
   reconnexion à la demande.
-- `mcp>=2.2,<3` dans `requirements.txt`.
+- `mcp>=2.2,<3` dans les dépendances (aujourd'hui `pyproject.toml`).
 
 ### 2.3 — Intégration au registre et à la politique · 1 j
 
@@ -368,18 +373,47 @@ premier coup à travers le vrai `main.py --text`.
 
 ---
 
-## Phase 4 — Qualité et packaging (≈ 2 jours)
+## Phase 4 — Qualité et packaging ✅ livrée
 
-- **Nettoyage lint** en un commit isolé : `ruff check --fix .` puis
-  `ruff format .` (429 problèmes, dont 336 lignes vides avec espaces). Ensuite
-  élargir `select` dans `ruff.toml` à `["E", "F", "W", "I", "UP", "B"]` et
-  retirer l'`ignore` sur B904.
-- **Packaging** : `pyproject.toml`, modules sous `src/jarvis/`, point d'entrée
-  `jarvis = "jarvis.__main__:main"`. Versions majeures épinglées.
-- **`LICENSE`** : le README annonce MIT, le fichier n'existe pas.
-- **`TESTING.md`** : la campagne manuelle que la suite automatisée ne peut pas
-  couvrir (qualité de transcription réelle, intelligibilité de la voix,
-  latence mesurée, micro physique, vrai serveur Ollama).
+- **Nettoyage lint** en deux commits, pas un seul. Élargir le filtre a sorti
+  518 remarques, dont quatre qui n'étaient pas du style : une clé `"site"` en
+  double dans `TERM_ALIASES` — la seconde remplaçait silencieusement la
+  première, et `"url"` cessait d'être une expansion de `"site"` —, deux levées
+  d'exception sans `from e`, et une affectation morte. Corrigées d'abord, pour
+  qu'un diff mécanique de 837 lignes ne les enterre pas. Puis `ruff --fix` sur
+  `["E","F","W","I","UP","B"]` : 155 lignes vides avec espaces, 246
+  annotations passées en PEP 585/604, 54 imports `typing` obsolètes, 13
+  imports morts, 10 blocs d'imports triés.
+- **`ruff format` écarté**, et `ruff.toml` dit pourquoi : 54 fichiers et 2500
+  lignes réécrites, pour un résultat moins lisible que ce qu'il remplace (les
+  tables d'alias de `text_utils.py` à une entrée par ligne, les littéraux
+  d'appels d'outils des tests profondément imbriqués). Les défauts étaient
+  chez le linter ; le formateur n'aurait fait que les déplacer.
+- **Packaging** : `pyproject.toml`, modules sous `src/jarvis/`, deux points
+  d'entrée (`jarvis`, `jarvis-setup-piper`), bornes de version majeure.
+  `requirements.txt` et `requirements-dev.txt` supprimés ;
+  `requirements-test.txt` reste et explique dans son en-tête pourquoi il ne
+  peut pas être un extra du paquet.
+- **Découpage interne inchangé.** Le §2 d'`ARCHITECTURE.md` décrit `audio/`,
+  `stt/`, `tts/`, `llm/` ; ce sont toujours des modules plats. Renommer
+  n'apporte rien tant qu'un module tient dans un fichier, et le document dit
+  désormais lequel existe et lequel reste une cible, plutôt que de décrire une
+  arborescence absente.
+- **CI** : un travail `package` en plus. Les tests peuvent retomber sur
+  l'arborescence source, donc une roue à laquelle il manque un sous-paquet les
+  passerait quand même ; celui-là construit la roue, l'installe sans
+  dépendances et importe au travers.
+- **`LICENSE`** : MIT, que le README annonçait depuis le premier commit.
+- **`TESTING.md`** : la campagne manuelle, en dix sections. Écrite contre le
+  code, pas en général : les noms d'outils, les surfaces de confirmation et
+  les scénarios de contamination y sont ceux que le moteur applique vraiment.
+
+**Vérifié au-delà de la suite**, parce que les annotations modernisées sont
+évaluées à l'exécution par pydantic et par les dataclasses : tous les modules
+compilent, `get_type_hints` résout sur `ToolSpec`, `ToolResult`,
+`ProviderConfig` et `ProviderState`, la roue embarque les 8 sous-paquets, et
+un cinquième smoke test résout `jarvis` depuis les métadonnées de point
+d'entrée et mène un tour complet au travers.
 
 ---
 
@@ -422,8 +456,9 @@ C'est le principal gain de l'orientation MCP : quatre fonctionnalités estimées
 | 1 — Registre, CRUD, politique | 4 j |
 | 2 — Async et MCP | 5 j |
 | 3 — Latence et usage quotidien | 4 j |
+| 3.5 — Fournisseurs LLM ordonnés (hors plan) | 0,5 j |
 | 4 — Qualité et packaging | 2 j |
-| **Jusqu'à l'objectif affiché** | **~16 j** |
+| **Jusqu'à l'objectif affiché** | **~16 j — livrée** |
 
 Phase 5 selon les priorités, la majeure partie étant devenue de la
 configuration.
@@ -505,4 +540,5 @@ tests/
 Hors périmètre automatisé, car cela suppose du matériel ou des poids de
 modèles : qualité réelle de transcription, intelligibilité de la voix, latence
 de bout en bout, micro physique, vrai serveur Ollama, et vrais serveurs MCP
-tiers. À documenter dans `TESTING.md` en Phase 4.
+tiers. Documenté dans [`TESTING.md`](TESTING.md), à passer avant chaque
+version.

@@ -5,8 +5,8 @@ import asyncio
 import numpy as np
 import pytest
 
-from audio_handler import AudioHandler
-from speech.barge_in import (
+from jarvis.audio_handler import AudioHandler
+from jarvis.speech.barge_in import (
     CALIBRATION_FRAMES,
     MIN_ENERGY,
     BargeInListener,
